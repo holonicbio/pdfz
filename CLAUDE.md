@@ -390,6 +390,10 @@ except DoclingHybridError as e:
 
 ## Troubleshooting
 
+**Note:** For comprehensive troubleshooting, see **[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md)** which covers installation issues, configuration problems, API errors, memory issues, and more.
+
+### Quick Reference: Common Issues
+
 ### Issue: "Missing OPENROUTER_API_KEY"
 **Cause:** API key not set  
 **Solution:**
@@ -437,3 +441,7 @@ For current development priorities, see:
 For specific components:
 - **docs/ARCHITECTURE.md** - Detailed architecture
 - **docs/components/** - Component specifications
+
+For API and usage:
+- **docs/API.md** - Complete Python API documentation
+- **docs/TROUBLESHOOTING.md** - Comprehensive troubleshooting guide
