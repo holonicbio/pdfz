@@ -101,7 +101,77 @@ class HybridPipeline:
         self._backend_name = name
         
         return self._backend
-    
+
+    async def _process_single_page(
+        self,
+        pdf_path: Path,
+        page_idx: int,
+        dpi: int,
+        backend: OcrVlmBackend,
+        backend_name: str,
+        doc_id: str,
+        total_pages: int,
+    ) -> PageResult | None:
+        """Process a single page: render and OCR.
+
+        Args:
+            pdf_path: Path to PDF file
+            page_idx: Zero-indexed page index
+            dpi: Rendering DPI
+            backend: OCR backend instance
+            backend_name: Backend name for metadata
+            doc_id: Document ID
+            total_pages: Total pages in document
+
+        Returns:
+            PageResult if successful, None if error
+        """
+        page_num = page_idx + 1  # 1-indexed for display
+
+        try:
+            # Render page
+            image_bytes = render_page_to_png_bytes(
+                pdf_path=pdf_path,
+                page_index=page_idx,
+                dpi=dpi,
+            )
+
+            # OCR
+            markdown = await backend.page_to_markdown(
+                image_bytes=image_bytes,
+                page_num=page_num,
+                doc_id=doc_id,
+            )
+
+            # Create page result
+            page_result = PageResult(
+                page_num=page_num,
+                doc_id=doc_id,
+                content=markdown,
+                backend_name=backend_name,
+                metadata={
+                    "image_size_kb": len(image_bytes) // 1024,
+                    "dpi": dpi,
+                },
+            )
+
+            logger.info(
+                "page_completed",
+                page_num=page_num,
+                total=total_pages,
+                markdown_chars=len(markdown),
+            )
+
+            return page_result
+
+        except Exception as e:
+            logger.error(
+                "page_failed",
+                page_num=page_num,
+                error=str(e),
+            )
+            return None
+
     async def convert_pdf(
         self,
         pdf_path: Path,
@@ -174,67 +244,69 @@ class HybridPipeline:
             
             # Get DPI
             dpi = options.dpi or self.config.resources.page_render_dpi
-            
-            # Process pages
+
+            # Create semaphore for concurrency control
+            semaphore = asyncio.Semaphore(self.config.resources.max_workers)
+
+            logger.info(
+                "starting_concurrent_processing",
+                num_pages=end_idx - start_idx,
+                max_workers=self.config.resources.max_workers,
+            )
+
+            # Process pages concurrently with semaphore
+            async def process_with_semaphore(page_idx: int):
+                """Process a single page with semaphore control."""
+                async with semaphore:
+                    return await self._process_single_page(
+                        pdf_path=pdf_path,
+                        page_idx=page_idx,
+                        dpi=dpi,
+                        backend=backend,
+                        backend_name=backend_name,
+                        doc_id=doc_id,
+                        total_pages=total_pages,
+                    )
+
+            # Create tasks for all pages
+            tasks = [
+                process_with_semaphore(page_idx)
+                for page_idx in range(start_idx, end_idx)
+            ]
+
+            # Execute concurrently and gather results
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            # Separate successful results from errors, maintaining page order
             page_results: list[PageResult] = []
             page_markdowns: list[str] = []
-            
-            for page_idx in range(start_idx, end_idx):
-                page_num = page_idx + 1  # 1-indexed for display
-                
-                try:
-                    # Render page
-                    image_bytes = render_page_to_png_bytes(
-                        pdf_path=pdf_path,
-                        page_index=page_idx,
-                        dpi=dpi,
-                    )
-                    
-                    # OCR
-                    markdown = await backend.page_to_markdown(
-                        image_bytes=image_bytes,
-                        page_num=page_num,
-                        doc_id=doc_id,
-                    )
-                    
-                    # Create page result
-                    page_result = PageResult(
-                        page_num=page_num,
-                        doc_id=doc_id,
-                        content=markdown,
-                        backend_name=backend_name,
-                        metadata={
-                            "image_size_kb": len(image_bytes) // 1024,
-                            "dpi": dpi,
-                        },
-                    )
-                    
-                    page_results.append(page_result)
-                    page_markdowns.append(markdown)
-                    
-                    logger.info(
-                        "page_completed",
-                        page_num=page_num,
-                        total=total_pages,
-                        markdown_chars=len(markdown),
-                    )
-                    
-                except Exception as e:
+
+            for result in results:
+                if isinstance(result, Exception):
+                    # Exception raised during processing
                     logger.error(
-                        "page_failed",
-                        page_num=page_num,
-                        error=str(e),
+                        "page_processing_exception",
+                        error=str(result),
+                        error_type=type(result).__name__,
                     )
-                    # Continue with other pages
+                    # Continue with other pages, skip failed ones
                     continue
+                elif result is None:
+                    # Page processing returned None (error already logged)
+                    continue
+                else:
+                    # Successful result
+                    page_results.append(result)
+                    page_markdowns.append(result.content)
             
             # Concatenate results
             if options.add_page_separators:
                 parts = []
-                for i, md in enumerate(page_markdowns):
-                    page_num = start_idx + i + 1
-                    separator = options.page_separator_format.format(page_num=page_num)
-                    parts.append(separator + md)
+                for page_result in page_results:
+                    separator = options.page_separator_format.format(
+                        page_num=page_result.page_num
+                    )
+                    parts.append(separator + page_result.content)
                 full_markdown = "\n\n".join(parts)
             else:
                 full_markdown = "\n\n".join(page_markdowns)
