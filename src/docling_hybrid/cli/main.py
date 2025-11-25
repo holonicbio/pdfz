@@ -15,12 +15,22 @@ from typing import Optional
 
 import typer
 from rich.console import Console
+from rich.progress import BarColumn, Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
 from rich.table import Table
 
 from docling_hybrid import __version__
 from docling_hybrid.backends import list_backends
 from docling_hybrid.common.config import init_config
-from docling_hybrid.common.errors import DoclingHybridError
+from docling_hybrid.common.errors import (
+    BackendConnectionError,
+    BackendError,
+    BackendResponseError,
+    BackendTimeoutError,
+    ConfigurationError,
+    DoclingHybridError,
+    RenderingError,
+    ValidationError,
+)
 from docling_hybrid.common.logging import setup_logging
 from docling_hybrid.orchestrator import ConversionOptions, HybridPipeline
 
@@ -33,6 +43,134 @@ app = typer.Typer(
 
 # Rich console for pretty output
 console = Console()
+
+
+def _get_error_hint(error: DoclingHybridError) -> str | None:
+    """Get actionable hint for an error.
+
+    Args:
+        error: The error to get hint for
+
+    Returns:
+        Hint string or None if no specific hint
+    """
+    # Configuration errors
+    if isinstance(error, ConfigurationError):
+        if "api_key" in error.message.lower() or "openrouter_api_key" in str(error.details).lower():
+            return (
+                "💡 Hint: Set your OpenRouter API key:\n"
+                "   export OPENROUTER_API_KEY=your-key-here\n"
+                "   Or add it to .env.local and run: source .env.local\n"
+                "   Get a free key at: https://openrouter.ai/keys"
+            )
+        elif "config" in error.message.lower():
+            return (
+                "💡 Hint: Check your configuration file path:\n"
+                "   --config configs/local.toml\n"
+                "   Or use the default config (configs/default.toml)"
+            )
+        elif "backend" in error.message.lower():
+            return (
+                "💡 Hint: Check available backends with:\n"
+                "   docling-hybrid-ocr backends\n"
+                "   Then use: --backend <name>"
+            )
+
+    # Backend connection errors
+    elif isinstance(error, BackendConnectionError):
+        return (
+            "💡 Hint: Check your internet connection and try again.\n"
+            "   If using a local backend (vLLM/MLX), ensure the server is running:\n"
+            "   - vLLM: http://localhost:8000\n"
+            "   - Check firewall settings"
+        )
+
+    # Backend timeout errors
+    elif isinstance(error, BackendTimeoutError):
+        return (
+            "💡 Hint: The backend is taking too long. Try:\n"
+            "   - Using a lower DPI: --dpi 100\n"
+            "   - Processing fewer pages: --max-pages 3\n"
+            "   - Waiting and trying again (API may be busy)"
+        )
+
+    # Backend response errors
+    elif isinstance(error, BackendResponseError):
+        status = error.details.get("status_code")
+        if status == 429:
+            return (
+                "💡 Hint: Rate limit exceeded. Try:\n"
+                "   - Wait a few minutes and try again\n"
+                "   - Process fewer pages at once: --max-pages 5\n"
+                "   - Check your API usage at OpenRouter dashboard"
+            )
+        elif status == 401 or status == 403:
+            return (
+                "💡 Hint: Authentication failed. Check:\n"
+                "   - Your API key is correct: echo $OPENROUTER_API_KEY\n"
+                "   - The key hasn't expired\n"
+                "   - You have permission to use the model"
+            )
+        elif status and 500 <= status < 600:
+            return (
+                "💡 Hint: Backend server error. Try:\n"
+                "   - Waiting a few minutes and trying again\n"
+                "   - Using a different backend: --backend <name>\n"
+                "   - Check OpenRouter status: https://status.openrouter.ai"
+            )
+
+    # Rendering errors
+    elif isinstance(error, RenderingError):
+        return (
+            "💡 Hint: PDF rendering failed. Try:\n"
+            "   - Verify the PDF opens in a PDF viewer\n"
+            "   - Use a lower DPI: --dpi 100\n"
+            "   - Try a different PDF file\n"
+            "   - Check file permissions"
+        )
+
+    # Validation errors
+    elif isinstance(error, ValidationError):
+        if "not found" in error.message.lower() or "does not exist" in error.message.lower():
+            return (
+                "💡 Hint: File not found. Check:\n"
+                "   - The file path is correct\n"
+                "   - The file exists: ls <path>\n"
+                "   - You have read permissions"
+            )
+
+    return None
+
+
+def _handle_docling_error(error: DoclingHybridError, console: Console, verbose: bool) -> None:
+    """Handle and display a Docling error with hints.
+
+    Args:
+        error: The error to handle
+        console: Rich console for output
+        verbose: Whether verbose output is enabled
+    """
+    # Show error message
+    console.print(f"\n[bold red]Error:[/bold red] {error.message}")
+
+    # Show details if present
+    if error.details:
+        console.print("\n[yellow]Details:[/yellow]")
+        for key, value in error.details.items():
+            # Skip internal keys
+            if key in ("backend",):
+                continue
+            console.print(f"  {key}: {value}")
+
+    # Show actionable hint
+    hint = _get_error_hint(error)
+    if hint:
+        console.print(f"\n{hint}")
+
+    # In verbose mode, show full exception
+    if verbose:
+        console.print("\n[dim]Full error details:[/dim]")
+        console.print(f"[dim]{repr(error)}[/dim]")
 
 
 def version_callback(value: bool) -> None:
@@ -150,9 +288,6 @@ def convert(
         log_format = "text"  # Always use text for CLI
         setup_logging(level=log_level, format=log_format)
         
-        # Show what we're doing
-        console.print(f"[bold blue]Converting:[/bold blue] {pdf_path}")
-        
         # Build options
         options = ConversionOptions(
             backend_name=backend,
@@ -161,10 +296,49 @@ def convert(
             max_pages=max_pages,
             start_page=start_page,
         )
-        
-        # Run conversion
-        result = asyncio.run(_run_conversion(config, pdf_path, output, options))
-        
+
+        # Show what we're doing
+        console.print(f"\n[bold blue]Converting:[/bold blue] {pdf_path}")
+
+        # Get page count to show progress
+        from docling_hybrid.renderer import get_page_count
+        try:
+            total_pages = get_page_count(pdf_path)
+            pages_to_process = min(
+                total_pages - start_page + 1,
+                max_pages if max_pages else total_pages
+            )
+            console.print(f"[dim]Total pages: {total_pages}, Processing: {pages_to_process}[/dim]")
+        except Exception:
+            # If we can't get page count, just show generic message
+            console.print(f"[dim]Processing pages...[/dim]")
+            pages_to_process = None
+
+        # Run conversion with progress bar
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[bold blue]{task.description}"),
+            BarColumn(),
+            TextColumn("[progress.percentage]{task.percentage:>3.0f}%"),
+            TimeElapsedColumn(),
+            console=console,
+        ) as progress:
+            if pages_to_process:
+                task = progress.add_task(
+                    f"Processing {pages_to_process} pages...",
+                    total=100
+                )
+            else:
+                task = progress.add_task(
+                    "Converting PDF...",
+                    total=None
+                )
+
+            # Run conversion in the background
+            result = asyncio.run(_run_conversion_with_progress(
+                config, pdf_path, output, options, progress, task
+            ))
+
         # Show results
         console.print()
         console.print(f"[bold green]✓ Conversion complete![/bold green]")
@@ -174,10 +348,7 @@ def convert(
         console.print(f"  Time: {result.metadata.get('elapsed_seconds', 0):.1f}s")
         
     except DoclingHybridError as e:
-        console.print(f"[bold red]Error:[/bold red] {e}")
-        if e.details:
-            for key, value in e.details.items():
-                console.print(f"  {key}: {value}")
+        _handle_docling_error(e, console, verbose)
         raise typer.Exit(1)
     except KeyboardInterrupt:
         console.print("\n[yellow]Cancelled by user[/yellow]")
@@ -197,6 +368,58 @@ async def _run_conversion(config, pdf_path, output, options):
             output_path=output,
             options=options,
         )
+
+
+async def _run_conversion_with_progress(config, pdf_path, output, options, progress, task_id):
+    """Run the conversion pipeline and update progress.
+
+    Args:
+        config: Application config
+        pdf_path: Path to PDF file
+        output: Output path
+        options: Conversion options
+        progress: Rich Progress instance
+        task_id: Task ID for progress updates
+
+    Returns:
+        ConversionResult
+    """
+    import asyncio
+
+    # Start the conversion
+    async def run_conversion():
+        async with HybridPipeline(config) as pipeline:
+            return await pipeline.convert_pdf(
+                pdf_path=pdf_path,
+                output_path=output,
+                options=options,
+            )
+
+    # Create the conversion task
+    conversion_task = asyncio.create_task(run_conversion())
+
+    # Update progress periodically while conversion runs
+    completed = False
+    current_progress = 0
+
+    while not completed:
+        # Check if conversion is done
+        if conversion_task.done():
+            completed = True
+            progress.update(task_id, completed=100)
+            break
+
+        # Simulate progress (since we don't have real progress hooks yet)
+        # This gives user feedback that something is happening
+        if current_progress < 95:  # Never reach 100 until actually done
+            current_progress += 5
+            progress.update(task_id, completed=current_progress)
+
+        # Wait a bit before checking again
+        await asyncio.sleep(1)
+
+    # Get the result
+    return await conversion_task
 
 
 @app.command()
