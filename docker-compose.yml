@@ -1,0 +1,83 @@
+version: "3.8"
+
+services:
+  # Main Docling Hybrid OCR service
+  docling-hybrid:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: docling-hybrid-ocr:latest
+    container_name: docling-hybrid-ocr
+
+    # Environment variables
+    environment:
+      # Required: OpenRouter API key (set in .env file)
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY}
+
+      # Optional: Override config file
+      - DOCLING_HYBRID_CONFIG=${DOCLING_HYBRID_CONFIG:-/app/configs/default.toml}
+
+      # Optional: Logging configuration
+      - DOCLING_HYBRID_LOG_LEVEL=${DOCLING_HYBRID_LOG_LEVEL:-INFO}
+
+      # Optional: Resource limits
+      - DOCLING_HYBRID_MAX_WORKERS=${DOCLING_HYBRID_MAX_WORKERS:-8}
+
+    # Volume mounts
+    volumes:
+      # Input PDFs
+      - ./input:/app/input:ro
+
+      # Output directory
+      - ./output:/app/output
+
+      # Custom configurations (optional)
+      - ./configs:/app/configs:ro
+
+    # Default command (convert first PDF in input directory)
+    # Override with: docker-compose run docling-hybrid convert /app/input/your-file.pdf
+    command: ["convert", "/app/input/document.pdf", "-o", "/app/output/result.md"]
+
+    # Resource limits (adjust based on your system)
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+
+    # Network mode
+    network_mode: bridge
+
+    # Restart policy
+    restart: unless-stopped
+
+  # Optional: vLLM backend service (for DeepSeek-OCR)
+  # Uncomment if you want to run vLLM locally
+  # vllm-backend:
+  #   image: vllm/vllm-openai:latest
+  #   container_name: vllm-backend
+  #   ports:
+  #     - "8000:8000"
+  #   environment:
+  #     - CUDA_VISIBLE_DEVICES=0
+  #   command: [
+  #     "--model", "deepseek-ai/DeepSeek-OCR",
+  #     "--host", "0.0.0.0",
+  #     "--port", "8000"
+  #   ]
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+  #   restart: unless-stopped
+  #   depends_on:
+  #     - docling-hybrid
+
+# Networks (optional, can define custom networks)
+networks:
+  default:
+    name: docling-hybrid-network
