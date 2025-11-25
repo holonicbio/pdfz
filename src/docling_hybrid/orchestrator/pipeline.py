@@ -36,6 +36,7 @@ from docling_hybrid.common.ids import generate_doc_id
 from docling_hybrid.common.logging import bind_context, clear_context, get_logger
 from docling_hybrid.common.models import OcrBackendConfig, PageResult
 from docling_hybrid.orchestrator.models import ConversionOptions, ConversionResult
+from docling_hybrid.orchestrator.progress import ProgressCallback
 from docling_hybrid.renderer import get_page_count, render_page_to_png_bytes
 
 logger = get_logger(__name__)
@@ -111,6 +112,7 @@ class HybridPipeline:
         backend_name: str,
         doc_id: str,
         total_pages: int,
+        progress_callback: ProgressCallback | None = None,
     ) -> PageResult | None:
         """Process a single page: render and OCR.
 
@@ -122,6 +124,7 @@ class HybridPipeline:
             backend_name: Backend name for metadata
             doc_id: Document ID
             total_pages: Total pages in document
+            progress_callback: Optional progress callback
 
         Returns:
             PageResult if successful, None if error
@@ -129,6 +132,17 @@ class HybridPipeline:
         page_num = page_idx + 1  # 1-indexed for display
 
         try:
+            # Notify page start
+            if progress_callback:
+                try:
+                    progress_callback.on_page_start(page_num, total_pages)
+                except Exception as cb_error:
+                    logger.error(
+                        "progress_callback_error",
+                        event="on_page_start",
+                        error=str(cb_error),
+                    )
+
             # Render page
             image_bytes = render_page_to_png_bytes(
                 pdf_path=pdf_path,
@@ -162,6 +176,17 @@ class HybridPipeline:
                 markdown_chars=len(markdown),
             )
 
+            # Notify page completion
+            if progress_callback:
+                try:
+                    progress_callback.on_page_complete(page_num, total_pages, page_result)
+                except Exception as cb_error:
+                    logger.error(
+                        "progress_callback_error",
+                        event="on_page_complete",
+                        error=str(cb_error),
+                    )
+
             return page_result
 
         except Exception as e:
@@ -170,6 +195,18 @@ class HybridPipeline:
                 page_num=page_num,
                 error=str(e),
             )
+
+            # Notify page error
+            if progress_callback:
+                try:
+                    progress_callback.on_page_error(page_num, e)
+                except Exception as cb_error:
+                    logger.error(
+                        "progress_callback_error",
+                        event="on_page_error",
+                        error=str(cb_error),
+                    )
+
             return None
 
     async def convert_pdf(
@@ -177,29 +214,31 @@ class HybridPipeline:
         pdf_path: Path,
         output_path: Path | None = None,
         options: ConversionOptions | None = None,
+        progress_callback: ProgressCallback | None = None,
     ) -> ConversionResult:
         """Convert a PDF to Markdown.
-        
+
         This is the main entry point for conversion. It:
         1. Validates the input PDF
         2. Generates a document ID
         3. Renders and processes each page
         4. Concatenates results
         5. Optionally writes to output file
-        
+
         Args:
             pdf_path: Path to the PDF file
             output_path: Path for output Markdown (optional)
                 If not provided, defaults to <pdf_name>.nemotron.md
             options: Conversion options (optional)
-        
+            progress_callback: Optional progress callback for real-time updates
+
         Returns:
             ConversionResult with full Markdown and per-page results
-            
+
         Raises:
             ValidationError: If PDF file doesn't exist or is invalid
             BackendError: If OCR processing fails
-            
+
         Example:
             >>> result = await pipeline.convert_pdf(
             ...     pdf_path=Path("document.pdf"),
@@ -210,26 +249,37 @@ class HybridPipeline:
         """
         options = options or ConversionOptions()
         start_time = time.time()
-        
+
         # Validate input
         if not pdf_path.exists():
             raise ValidationError(
                 f"PDF file not found: {pdf_path}",
                 details={"path": str(pdf_path)}
             )
-        
+
         # Generate document ID
         doc_id = generate_doc_id(pdf_path.name)
-        
+
         # Bind logging context
         bind_context(doc_id=doc_id, pdf=str(pdf_path))
-        
+
         try:
             logger.info("conversion_started", pdf=str(pdf_path))
-            
+
             # Get page count
             total_pages = get_page_count(pdf_path)
             logger.info("pdf_loaded", total_pages=total_pages)
+
+            # Notify conversion start
+            if progress_callback:
+                try:
+                    progress_callback.on_conversion_start(doc_id, total_pages)
+                except Exception as cb_error:
+                    logger.error(
+                        "progress_callback_error",
+                        event="on_conversion_start",
+                        error=str(cb_error),
+                    )
             
             # Calculate page range
             start_idx = options.start_page - 1  # Convert to 0-indexed
@@ -266,6 +316,7 @@ class HybridPipeline:
                         backend_name=backend_name,
                         doc_id=doc_id,
                         total_pages=total_pages,
+                        progress_callback=progress_callback,
                     )
 
             # Create tasks for all pages
@@ -345,9 +396,34 @@ class HybridPipeline:
                 processed_pages=len(page_results),
                 elapsed_seconds=round(elapsed, 2),
             )
-            
+
+            # Notify conversion complete
+            if progress_callback:
+                try:
+                    progress_callback.on_conversion_complete(result)
+                except Exception as cb_error:
+                    logger.error(
+                        "progress_callback_error",
+                        event="on_conversion_complete",
+                        error=str(cb_error),
+                    )
+
             return result
-            
+
+        except Exception as conversion_error:
+            # Notify conversion error
+            if progress_callback:
+                try:
+                    progress_callback.on_conversion_error(conversion_error)
+                except Exception as cb_error:
+                    logger.error(
+                        "progress_callback_error",
+                        event="on_conversion_error",
+                        error=str(cb_error),
+                    )
+            # Re-raise the original error
+            raise
+
         finally:
             clear_context()
     
