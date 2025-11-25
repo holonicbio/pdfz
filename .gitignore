@@ -91,9 +91,6 @@ ipython_config.py
 
 # Project-specific
 configs/secrets.toml
-*.pdf
-*.png
-output/
 *.md.bak
 
 # Distribution / packaging
