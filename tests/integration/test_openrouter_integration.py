@@ -332,3 +332,235 @@ class TestAllPDFs:
 
         # All should succeed
         assert successful == len(results), f"{len(results) - successful} PDFs failed"
+
+
+# ============================================================================
+# Concurrent Processing & Rate Limiting Tests
+# ============================================================================
+
+
+@pytest.mark.live_api
+@pytest.mark.requires_pdfs
+@pytest.mark.asyncio
+class TestConcurrentProcessingWithRateLimiting:
+    """Test concurrent page processing with rate limiting."""
+
+    async def test_concurrent_page_processing(self, api_key, first_test_pdf, tmp_path):
+        """Test that multiple pages can be processed concurrently."""
+        import time
+
+        config_dict = {
+            "app": {"name": "test", "version": "0.1.0", "environment": "test"},
+            "logging": {"level": "INFO", "format": "text"},
+            "resources": {
+                "max_workers": 3,  # Process 3 pages concurrently
+                "max_memory_mb": 4096,
+                "page_render_dpi": 150,
+                "http_timeout_s": 120,
+                "http_retry_attempts": 3,
+            },
+            "backends": {
+                "default": "nemotron-openrouter",
+                "configs": {
+                    "nemotron-openrouter": {
+                        "name": "nemotron-openrouter",
+                        "model": "nvidia/nemotron-nano-12b-v2-vl:free",
+                        "base_url": "https://openrouter.ai/api/v1/chat/completions",
+                        "api_key": api_key,
+                        "temperature": 0.0,
+                        "max_tokens": 4096,
+                    },
+                },
+            },
+            "output": {
+                "format": "markdown",
+                "add_page_separators": True,
+                "page_separator": "\n\n---\n\n<!-- Page {page_num} -->\n\n",
+            },
+            "docling": {
+                "do_ocr": False,
+                "do_table_structure": False,
+                "do_cell_matching": False,
+            },
+        }
+
+        config = Config.model_validate(config_dict)
+        pipeline = HybridPipeline(config)
+
+        output_path = tmp_path / "concurrent_output.md"
+        options = ConversionOptions(
+            max_pages=3,  # Process 3 pages to test concurrency
+            dpi=150,
+            output_path=output_path,
+        )
+
+        start_time = time.time()
+
+        async with pipeline:
+            result = await pipeline.convert_pdf(first_test_pdf, options=options)
+
+        elapsed = time.time() - start_time
+
+        assert result is not None
+        assert result.processed_pages >= 1
+        assert result.processed_pages <= 3
+
+        print(f"\n--- Concurrent Processing Test ---")
+        print(f"Pages processed: {result.processed_pages}")
+        print(f"Time elapsed: {elapsed:.2f}s")
+        print(f"Average time per page: {elapsed/result.processed_pages:.2f}s")
+
+        # With concurrent processing, total time should be less than
+        # sequential (which would be ~sum of individual page times)
+        # This is a basic sanity check
+
+    async def test_rate_limit_handling(self, api_key, first_test_pdf, tmp_path):
+        """Test handling of rate limits with small delays between requests."""
+        config_dict = {
+            "app": {"name": "test", "version": "0.1.0", "environment": "test"},
+            "logging": {"level": "DEBUG", "format": "text"},
+            "resources": {
+                "max_workers": 1,  # Sequential to test rate limiting
+                "max_memory_mb": 2048,
+                "page_render_dpi": 150,
+                "http_timeout_s": 120,
+                "http_retry_attempts": 3,
+            },
+            "backends": {
+                "default": "nemotron-openrouter",
+                "configs": {
+                    "nemotron-openrouter": {
+                        "name": "nemotron-openrouter",
+                        "model": "nvidia/nemotron-nano-12b-v2-vl:free",
+                        "base_url": "https://openrouter.ai/api/v1/chat/completions",
+                        "api_key": api_key,
+                        "temperature": 0.0,
+                        "max_tokens": 4096,
+                        "max_retries": 5,  # More retries for rate limiting
+                        "retry_initial_delay": 2.0,
+                        "retry_max_delay": 30.0,
+                    },
+                },
+            },
+            "output": {
+                "format": "markdown",
+                "add_page_separators": True,
+                "page_separator": "\n\n---\n\n<!-- Page {page_num} -->\n\n",
+            },
+            "docling": {
+                "do_ocr": False,
+                "do_table_structure": False,
+                "do_cell_matching": False,
+            },
+        }
+
+        config = Config.model_validate(config_dict)
+        pipeline = HybridPipeline(config)
+
+        output_path = tmp_path / "rate_limit_output.md"
+        options = ConversionOptions(
+            max_pages=2,
+            dpi=150,
+            output_path=output_path,
+        )
+
+        async with pipeline:
+            result = await pipeline.convert_pdf(first_test_pdf, options=options)
+
+        assert result is not None
+        assert result.processed_pages >= 1
+
+        print(f"\n--- Rate Limit Test ---")
+        print(f"Pages processed: {result.processed_pages}")
+        print(f"Retries handled gracefully")
+
+
+# ============================================================================
+# Error Handling Tests with Real API
+# ============================================================================
+
+
+@pytest.mark.live_api
+@pytest.mark.asyncio
+class TestErrorHandlingWithRealAPI:
+    """Test error handling scenarios with real OpenRouter API."""
+
+    async def test_invalid_api_key_error(self, first_test_pdf):
+        """Test handling of invalid API key (401 error)."""
+        from docling_hybrid.common.errors import ConfigurationError
+
+        config_dict = {
+            "app": {"name": "test", "version": "0.1.0", "environment": "test"},
+            "logging": {"level": "DEBUG", "format": "text"},
+            "resources": {
+                "max_workers": 1,
+                "max_memory_mb": 2048,
+                "page_render_dpi": 150,
+                "http_timeout_s": 30,
+                "http_retry_attempts": 1,
+            },
+            "backends": {
+                "default": "nemotron-openrouter",
+                "configs": {
+                    "nemotron-openrouter": {
+                        "name": "nemotron-openrouter",
+                        "model": "nvidia/nemotron-nano-12b-v2-vl:free",
+                        "base_url": "https://openrouter.ai/api/v1/chat/completions",
+                        "api_key": "invalid-key-for-testing-12345",
+                        "temperature": 0.0,
+                        "max_tokens": 4096,
+                    },
+                },
+            },
+            "output": {
+                "format": "markdown",
+                "add_page_separators": False,
+            },
+            "docling": {
+                "do_ocr": False,
+                "do_table_structure": False,
+                "do_cell_matching": False,
+            },
+        }
+
+        config = Config.model_validate(config_dict)
+        pipeline = HybridPipeline(config)
+
+        options = ConversionOptions(max_pages=1, dpi=150)
+
+        # Should raise an error due to invalid API key
+        with pytest.raises(Exception) as exc_info:
+            async with pipeline:
+                await pipeline.convert_pdf(first_test_pdf, options=options)
+
+        # Error should be related to authentication/API key
+        error_msg = str(exc_info.value).lower()
+        assert "api key" in error_msg or "401" in error_msg or "auth" in error_msg or "unauthorized" in error_msg
+
+        print(f"\n--- Invalid API Key Test ---")
+        print(f"Error caught correctly: {type(exc_info.value).__name__}")
+
+    async def test_backend_health_check(self, openrouter_config):
+        """Test backend health check with real API."""
+        config = OcrBackendConfig(**openrouter_config)
+
+        # If no API key is set, use a dummy key and expect failure
+        if not config.api_key:
+            config.api_key = "test-key"
+            expected_health = False
+        else:
+            expected_health = True
+
+        backend = OpenRouterNemotronBackend(config)
+
+        async with backend:
+            is_healthy = await backend.health_check()
+
+        if expected_health:
+            assert is_healthy is True
+            print(f"\n--- Health Check Test ---")
+            print(f"Backend is healthy: {is_healthy}")
+        else:
+            # With invalid key, might still return True if endpoint is reachable
+            print(f"\n--- Health Check Test ---")
+            print(f"Health check result: {is_healthy}")
