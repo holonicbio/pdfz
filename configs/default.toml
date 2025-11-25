@@ -1,0 +1,57 @@
+# configs/default.toml
+# Production defaults for Docling Hybrid OCR
+
+[app]
+name = "docling-hybrid-ocr"
+version = "0.1.0"
+environment = "production"
+
+[logging]
+level = "INFO"
+format = "json"  # Structured logs for production
+
+[resources]
+max_workers = 8       # Concurrent page processing
+max_memory_mb = 16384 # 16GB
+page_render_dpi = 200 # Default DPI for page rendering
+http_timeout_s = 120  # Timeout for VLM API calls
+http_retry_attempts = 3
+
+[backends]
+# Default backend for OCR
+default = "nemotron-openrouter"
+
+[backends.nemotron-openrouter]
+name = "nemotron-openrouter"
+model = "nvidia/nemotron-nano-12b-v2-vl:free"
+base_url = "https://openrouter.ai/api/v1/chat/completions"
+temperature = 0.0
+max_tokens = 8192
+
+[backends.deepseek-vllm]
+name = "deepseek-vllm"
+model = "deepseek-ai/DeepSeek-OCR"
+base_url = "http://localhost:8000/v1/chat/completions"
+temperature = 0.0
+max_tokens = 8192
+
+[backends.deepseek-mlx]
+name = "deepseek-mlx"
+model = "deepseek-ai/DeepSeek-OCR"
+base_url = "http://localhost:8080/v1/chat/completions"
+temperature = 0.0
+max_tokens = 8192
+
+[output]
+# Default output format
+format = "markdown"
+# Whether to add page separators
+add_page_separators = true
+# Page separator format (uses {page_num} placeholder)
+page_separator = "<!-- PAGE {page_num} -->\n\n"
+
+[docling]
+# Docling-specific settings
+do_ocr = false           # We handle OCR ourselves
+do_table_structure = true
+do_cell_matching = true

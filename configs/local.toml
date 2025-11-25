@@ -1,0 +1,54 @@
+# configs/local.toml
+# Local development configuration for 12GB RAM machines
+
+[app]
+name = "docling-hybrid-ocr"
+version = "0.1.0"
+environment = "development"
+
+[logging]
+level = "DEBUG"
+format = "text"  # Human-readable for development
+
+[resources]
+# Reduced for 12GB RAM development machine
+max_workers = 2         # Limited concurrent processing
+max_memory_mb = 4096    # 4GB max
+page_render_dpi = 150   # Lower DPI to save memory
+http_timeout_s = 180    # More generous timeout for debugging
+http_retry_attempts = 2
+
+[backends]
+# Use free tier for local development
+default = "nemotron-openrouter"
+
+[backends.nemotron-openrouter]
+name = "nemotron-openrouter"
+model = "nvidia/nemotron-nano-12b-v2-vl:free"  # Free tier model
+base_url = "https://openrouter.ai/api/v1/chat/completions"
+temperature = 0.0
+max_tokens = 4096  # Reduced for faster responses
+
+[backends.deepseek-vllm]
+name = "deepseek-vllm"
+model = "deepseek-ai/DeepSeek-OCR"
+base_url = "http://localhost:8000/v1/chat/completions"
+temperature = 0.0
+max_tokens = 4096
+
+[backends.deepseek-mlx]
+name = "deepseek-mlx"
+model = "deepseek-ai/DeepSeek-OCR"
+base_url = "http://localhost:8080/v1/chat/completions"
+temperature = 0.0
+max_tokens = 4096
+
+[output]
+format = "markdown"
+add_page_separators = true
+page_separator = "<!-- PAGE {page_num} -->\n\n"
+
+[docling]
+do_ocr = false
+do_table_structure = true
+do_cell_matching = true

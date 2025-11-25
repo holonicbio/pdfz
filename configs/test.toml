@@ -1,0 +1,52 @@
+# configs/test.toml
+# Test configuration (minimal resources, mocked services)
+
+[app]
+name = "docling-hybrid-ocr"
+version = "0.1.0"
+environment = "test"
+
+[logging]
+level = "DEBUG"
+format = "text"
+
+[resources]
+max_workers = 1         # Single worker for deterministic tests
+max_memory_mb = 2048    # 2GB
+page_render_dpi = 72    # Low DPI for fast tests
+http_timeout_s = 10     # Short timeout
+http_retry_attempts = 1
+
+[backends]
+default = "nemotron-openrouter"
+
+[backends.nemotron-openrouter]
+name = "nemotron-openrouter"
+model = "nvidia/nemotron-nano-12b-v2-vl:free"
+base_url = "https://openrouter.ai/api/v1/chat/completions"
+temperature = 0.0
+max_tokens = 1024
+
+[backends.deepseek-vllm]
+name = "deepseek-vllm"
+model = "deepseek-ai/DeepSeek-OCR"
+base_url = "http://localhost:8000/v1/chat/completions"
+temperature = 0.0
+max_tokens = 1024
+
+[backends.deepseek-mlx]
+name = "deepseek-mlx"
+model = "deepseek-ai/DeepSeek-OCR"
+base_url = "http://localhost:8080/v1/chat/completions"
+temperature = 0.0
+max_tokens = 1024
+
+[output]
+format = "markdown"
+add_page_separators = false
+page_separator = ""
+
+[docling]
+do_ocr = false
+do_table_structure = false
+do_cell_matching = false
