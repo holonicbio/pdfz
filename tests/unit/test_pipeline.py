@@ -180,6 +180,9 @@ class TestHybridPipelineConvertPdf:
         """Test converting a single-page PDF."""
         pipeline = HybridPipeline(test_config)
 
+        # Disable page separators for this test
+        options = ConversionOptions(add_page_separators=False)
+
         with patch(
             "docling_hybrid.orchestrator.pipeline.make_backend",
             return_value=mock_backend,
@@ -190,7 +193,7 @@ class TestHybridPipelineConvertPdf:
             "docling_hybrid.orchestrator.pipeline.render_page_to_png_bytes",
             return_value=sample_image_bytes,
         ):
-            result = await pipeline.convert_pdf(sample_pdf_path)
+            result = await pipeline.convert_pdf(sample_pdf_path, options=options)
 
         assert isinstance(result, ConversionResult)
         assert result.total_pages == 1
@@ -211,6 +214,9 @@ class TestHybridPipelineConvertPdf:
         page_contents = ["# Page 1", "# Page 2", "# Page 3"]
         mock_backend.page_to_markdown.side_effect = page_contents
 
+        # Disable page separators for this test
+        options = ConversionOptions(add_page_separators=False)
+
         with patch(
             "docling_hybrid.orchestrator.pipeline.make_backend",
             return_value=mock_backend,
@@ -221,7 +227,7 @@ class TestHybridPipelineConvertPdf:
             "docling_hybrid.orchestrator.pipeline.render_page_to_png_bytes",
             return_value=sample_image_bytes,
         ):
-            result = await pipeline.convert_pdf(sample_pdf_path)
+            result = await pipeline.convert_pdf(sample_pdf_path, options=options)
 
         assert result.total_pages == 3
         assert result.processed_pages == 3
@@ -275,6 +281,9 @@ class TestHybridPipelineConvertPdf:
             "# Page 3",
         ]
 
+        # Disable page separators for this test
+        options = ConversionOptions(add_page_separators=False)
+
         with patch(
             "docling_hybrid.orchestrator.pipeline.make_backend",
             return_value=mock_backend,
@@ -285,7 +294,7 @@ class TestHybridPipelineConvertPdf:
             "docling_hybrid.orchestrator.pipeline.render_page_to_png_bytes",
             return_value=sample_image_bytes,
         ):
-            result = await pipeline.convert_pdf(sample_pdf_path)
+            result = await pipeline.convert_pdf(sample_pdf_path, options=options)
 
         assert result.total_pages == 3
         assert result.processed_pages == 2  # Pages 1 and 3 succeeded
@@ -433,8 +442,6 @@ class TestHybridPipelineProgressCallbacks:
     ):
         """Test conversion with progress callback."""
         pipeline = HybridPipeline(test_config)
-        pipeline._backend = mock_backend
-        pipeline._backend_name = "mock-backend"
 
         # Track callback invocations
         events = []
@@ -461,8 +468,14 @@ class TestHybridPipelineProgressCallbacks:
         callback = TrackingCallback()
 
         with patch(
+            "docling_hybrid.orchestrator.pipeline.make_backend",
+            return_value=mock_backend,
+        ), patch(
             "docling_hybrid.orchestrator.pipeline.render_page_to_png_bytes",
             return_value=sample_image_bytes,
+        ), patch(
+            "docling_hybrid.orchestrator.pipeline.get_page_count",
+            return_value=1,
         ):
             result = await pipeline.convert_pdf(
                 pdf_path=sample_pdf_path,
@@ -481,12 +494,16 @@ class TestHybridPipelineProgressCallbacks:
     ):
         """Test conversion works without progress callback."""
         pipeline = HybridPipeline(test_config)
-        pipeline._backend = mock_backend
-        pipeline._backend_name = "mock-backend"
 
         with patch(
+            "docling_hybrid.orchestrator.pipeline.make_backend",
+            return_value=mock_backend,
+        ), patch(
             "docling_hybrid.orchestrator.pipeline.render_page_to_png_bytes",
             return_value=sample_image_bytes,
+        ), patch(
+            "docling_hybrid.orchestrator.pipeline.get_page_count",
+            return_value=1,
         ):
             result = await pipeline.convert_pdf(
                 pdf_path=sample_pdf_path,
@@ -502,8 +519,6 @@ class TestHybridPipelineProgressCallbacks:
     ):
         """Test that callback errors don't stop conversion."""
         pipeline = HybridPipeline(test_config)
-        pipeline._backend = mock_backend
-        pipeline._backend_name = "mock-backend"
 
         class ErrorCallback:
             def on_conversion_start(self, doc_id: str, total_pages: int) -> None:
@@ -527,8 +542,14 @@ class TestHybridPipelineProgressCallbacks:
         callback = ErrorCallback()
 
         with patch(
+            "docling_hybrid.orchestrator.pipeline.make_backend",
+            return_value=mock_backend,
+        ), patch(
             "docling_hybrid.orchestrator.pipeline.render_page_to_png_bytes",
             return_value=sample_image_bytes,
+        ), patch(
+            "docling_hybrid.orchestrator.pipeline.get_page_count",
+            return_value=1,
         ):
             # Should not raise despite callback errors
             result = await pipeline.convert_pdf(
@@ -545,8 +566,6 @@ class TestHybridPipelineProgressCallbacks:
     ):
         """Test that on_page_error is called when page processing fails."""
         pipeline = HybridPipeline(test_config)
-        pipeline._backend = mock_backend
-        pipeline._backend_name = "mock-backend"
 
         page_errors = []
 
@@ -572,8 +591,14 @@ class TestHybridPipelineProgressCallbacks:
         callback = TrackingCallback()
 
         with patch(
+            "docling_hybrid.orchestrator.pipeline.make_backend",
+            return_value=mock_backend,
+        ), patch(
             "docling_hybrid.orchestrator.pipeline.render_page_to_png_bytes",
             side_effect=RuntimeError("Render failed"),
+        ), patch(
+            "docling_hybrid.orchestrator.pipeline.get_page_count",
+            return_value=1,
         ):
             result = await pipeline.convert_pdf(
                 pdf_path=sample_pdf_path,
