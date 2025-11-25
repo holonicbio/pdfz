@@ -647,5 +647,208 @@ def convert_batch_command(
         raise typer.Exit(1)
 
 
+@app.command()
+def health(
+    config_file: Optional[Path] = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Path to configuration file",
+        exists=True,
+    ),
+    skip_backends: bool = typer.Option(
+        False,
+        "--skip-backends",
+        help="Skip backend connectivity checks",
+    ),
+    timeout: int = typer.Option(
+        10,
+        "--timeout",
+        "-t",
+        help="Backend check timeout in seconds",
+        min=1,
+        max=60,
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Show detailed health information",
+    ),
+) -> None:
+    """Check system health and backend connectivity.
+
+    Performs comprehensive health checks including:
+    - Python version compatibility
+    - Configuration validation
+    - Backend connectivity (optional)
+    - System resource availability
+
+    Exit codes:
+    - 0: All checks passed (healthy)
+    - 1: Some checks degraded but operational
+    - 2: Critical checks failed (unhealthy)
+
+    Examples:
+
+        # Basic health check
+        docling-hybrid-ocr health
+
+        # Skip backend connectivity checks
+        docling-hybrid-ocr health --skip-backends
+
+        # Verbose output with details
+        docling-hybrid-ocr health --verbose
+
+        # Custom timeout for backend checks
+        docling-hybrid-ocr health --timeout 5
+    """
+    try:
+        # Initialize configuration
+        config = init_config(config_file)
+
+        # Setup minimal logging
+        from docling_hybrid.common.logging import setup_logging
+        setup_logging(level="WARNING", format="text")
+
+        # Run health checks
+        from docling_hybrid.common.health import check_system_health, format_health_report
+
+        health_result = asyncio.run(check_system_health(
+            config=config,
+            check_backends=not skip_backends,
+            backend_timeout=timeout,
+        ))
+
+        # Format and display report
+        report = format_health_report(health_result, verbose=verbose)
+        console.print(report)
+
+        # Exit with appropriate code
+        from docling_hybrid.common.health import HealthStatus
+        if health_result.overall_status == HealthStatus.HEALTHY:
+            raise typer.Exit(0)
+        elif health_result.overall_status == HealthStatus.DEGRADED:
+            raise typer.Exit(1)
+        else:
+            raise typer.Exit(2)
+
+    except ConfigurationError as e:
+        console.print(f"[bold red]Configuration Error:[/bold red] {e.message}")
+        if e.details:
+            console.print(f"[dim]Details: {e.details}[/dim]")
+        raise typer.Exit(2)
+    except Exception as e:
+        console.print(f"[bold red]Health check failed:[/bold red] {e}")
+        if verbose:
+            console.print_exception()
+        raise typer.Exit(2)
+
+
+@app.command()
+def validate_config(
+    config_file: Optional[Path] = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Path to configuration file to validate",
+        exists=True,
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help="Show detailed validation information",
+    ),
+) -> None:
+    """Validate configuration file.
+
+    Checks configuration file for:
+    - Valid TOML syntax
+    - Required sections and fields
+    - Value types and constraints
+    - Backend configurations
+    - API key availability
+
+    Exit codes:
+    - 0: Configuration is valid
+    - 1: Configuration has errors
+
+    Examples:
+
+        # Validate default configuration
+        docling-hybrid-ocr validate-config
+
+        # Validate specific config file
+        docling-hybrid-ocr validate-config --config configs/local.toml
+
+        # Verbose validation with details
+        docling-hybrid-ocr validate-config --verbose
+    """
+    try:
+        from docling_hybrid.common.health import check_config_health
+
+        console.print(f"\n[bold blue]Validating configuration...[/bold blue]")
+        if config_file:
+            console.print(f"[dim]Config file: {config_file}[/dim]\n")
+        else:
+            console.print(f"[dim]Config file: default[/dim]\n")
+
+        # Check config health
+        result = asyncio.run(check_config_health(config_file))
+
+        # Display result
+        from docling_hybrid.common.health import HealthStatus
+
+        if result.status == HealthStatus.HEALTHY:
+            console.print("[bold green]✓ Configuration is valid[/bold green]")
+            console.print(f"  {result.message}")
+
+            if verbose and result.details:
+                console.print("\n[bold]Configuration Details:[/bold]")
+                for key, value in result.details.items():
+                    console.print(f"  {key}: {value}")
+
+            raise typer.Exit(0)
+
+        elif result.status == HealthStatus.DEGRADED:
+            console.print("[bold yellow]⚠ Configuration has warnings[/bold yellow]")
+            console.print(f"  {result.message}")
+
+            if "issues" in result.details:
+                console.print("\n[bold]Issues:[/bold]")
+                for issue in result.details["issues"]:
+                    console.print(f"  • {issue}")
+
+            if verbose and result.details:
+                console.print("\n[bold]Details:[/bold]")
+                for key, value in result.details.items():
+                    if key != "issues":
+                        console.print(f"  {key}: {value}")
+
+            console.print("\n[dim]Configuration can be used but may not work optimally.[/dim]")
+            raise typer.Exit(0)
+
+        else:  # UNHEALTHY
+            console.print("[bold red]✗ Configuration is invalid[/bold red]")
+            console.print(f"  {result.message}")
+
+            if result.details:
+                console.print("\n[bold]Error Details:[/bold]")
+                for key, value in result.details.items():
+                    console.print(f"  {key}: {value}")
+
+            console.print("\n[dim]Fix the errors above and try again.[/dim]")
+            raise typer.Exit(1)
+
+    except typer.Exit:
+        raise
+    except Exception as e:
+        console.print(f"[bold red]Validation failed:[/bold red] {e}")
+        if verbose:
+            console.print_exception()
+        raise typer.Exit(1)
+
+
 if __name__ == "__main__":
     app()

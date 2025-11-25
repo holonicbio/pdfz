@@ -24,9 +24,48 @@ Usage:
 
 from docling_hybrid.orchestrator.pipeline import HybridPipeline
 from docling_hybrid.orchestrator.models import ConversionResult, ConversionOptions
+from docling_hybrid.orchestrator.progress import ProgressCallback, is_progress_callback
+from docling_hybrid.orchestrator.callbacks import (
+    ConsoleProgressCallback,
+    FileProgressCallback,
+    CompositeProgressCallback,
+)
+from docling_hybrid.orchestrator.events import (
+    ProgressEvent,
+    ProgressEventType,
+    ConversionStartEvent,
+    PageStartEvent,
+    PageCompleteEvent,
+    PageErrorEvent,
+    ConversionCompleteEvent,
+    ConversionErrorEvent,
+    EventQueueCallback,
+    to_dict as event_to_dict,
+    from_dict as event_from_dict,
+)
 
 __all__ = [
+    # Pipeline
     "HybridPipeline",
     "ConversionResult",
     "ConversionOptions",
+    # Progress
+    "ProgressCallback",
+    "is_progress_callback",
+    # Callbacks
+    "ConsoleProgressCallback",
+    "FileProgressCallback",
+    "CompositeProgressCallback",
+    # Events
+    "ProgressEvent",
+    "ProgressEventType",
+    "ConversionStartEvent",
+    "PageStartEvent",
+    "PageCompleteEvent",
+    "PageErrorEvent",
+    "ConversionCompleteEvent",
+    "ConversionErrorEvent",
+    "EventQueueCallback",
+    "event_to_dict",
+    "event_from_dict",
 ]

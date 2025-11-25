@@ -422,3 +422,208 @@ class TestHybridPipelineContextManager:
         # Backend should be cleared
         assert pipeline._backend is None
         assert pipeline._backend_name is None
+
+
+class TestHybridPipelineProgressCallbacks:
+    """Tests for progress callback integration."""
+
+    @pytest.mark.asyncio
+    async def test_convert_with_progress_callback(
+        self, test_config, sample_pdf_path, sample_image_bytes, mock_backend
+    ):
+        """Test conversion with progress callback."""
+        pipeline = HybridPipeline(test_config)
+        pipeline._backend = mock_backend
+        pipeline._backend_name = "mock-backend"
+
+        # Track callback invocations
+        events = []
+
+        class TrackingCallback:
+            def on_conversion_start(self, doc_id: str, total_pages: int) -> None:
+                events.append(("start", doc_id, total_pages))
+
+            def on_page_start(self, page_num: int, total: int) -> None:
+                events.append(("page_start", page_num, total))
+
+            def on_page_complete(self, page_num: int, total: int, result) -> None:
+                events.append(("page_complete", page_num, total))
+
+            def on_page_error(self, page_num: int, error: Exception) -> None:
+                events.append(("page_error", page_num, str(error)))
+
+            def on_conversion_complete(self, result) -> None:
+                events.append(("complete", result.doc_id))
+
+            def on_conversion_error(self, error: Exception) -> None:
+                events.append(("error", str(error)))
+
+        callback = TrackingCallback()
+
+        with patch(
+            "docling_hybrid.orchestrator.pipeline.render_page_to_png_bytes",
+            return_value=sample_image_bytes,
+        ):
+            result = await pipeline.convert_pdf(
+                pdf_path=sample_pdf_path,
+                progress_callback=callback,
+            )
+
+        # Verify callback was invoked
+        assert len(events) >= 3  # start, page_start, page_complete, complete
+        assert events[0][0] == "start"
+        assert events[-1][0] == "complete"
+        assert events[-1][1] == result.doc_id
+
+    @pytest.mark.asyncio
+    async def test_convert_without_progress_callback(
+        self, test_config, sample_pdf_path, sample_image_bytes, mock_backend
+    ):
+        """Test conversion works without progress callback."""
+        pipeline = HybridPipeline(test_config)
+        pipeline._backend = mock_backend
+        pipeline._backend_name = "mock-backend"
+
+        with patch(
+            "docling_hybrid.orchestrator.pipeline.render_page_to_png_bytes",
+            return_value=sample_image_bytes,
+        ):
+            result = await pipeline.convert_pdf(
+                pdf_path=sample_pdf_path,
+                progress_callback=None,  # Explicitly None
+            )
+
+        assert result is not None
+        assert result.processed_pages == 1
+
+    @pytest.mark.asyncio
+    async def test_callback_error_does_not_stop_conversion(
+        self, test_config, sample_pdf_path, sample_image_bytes, mock_backend
+    ):
+        """Test that callback errors don't stop conversion."""
+        pipeline = HybridPipeline(test_config)
+        pipeline._backend = mock_backend
+        pipeline._backend_name = "mock-backend"
+
+        class ErrorCallback:
+            def on_conversion_start(self, doc_id: str, total_pages: int) -> None:
+                raise ValueError("Callback error")
+
+            def on_page_start(self, page_num: int, total: int) -> None:
+                raise ValueError("Callback error")
+
+            def on_page_complete(self, page_num: int, total: int, result) -> None:
+                raise ValueError("Callback error")
+
+            def on_page_error(self, page_num: int, error: Exception) -> None:
+                raise ValueError("Callback error")
+
+            def on_conversion_complete(self, result) -> None:
+                raise ValueError("Callback error")
+
+            def on_conversion_error(self, error: Exception) -> None:
+                raise ValueError("Callback error")
+
+        callback = ErrorCallback()
+
+        with patch(
+            "docling_hybrid.orchestrator.pipeline.render_page_to_png_bytes",
+            return_value=sample_image_bytes,
+        ):
+            # Should not raise despite callback errors
+            result = await pipeline.convert_pdf(
+                pdf_path=sample_pdf_path,
+                progress_callback=callback,
+            )
+
+        assert result is not None
+        assert result.processed_pages == 1
+
+    @pytest.mark.asyncio
+    async def test_page_error_callback_invoked(
+        self, test_config, sample_pdf_path, mock_backend
+    ):
+        """Test that on_page_error is called when page processing fails."""
+        pipeline = HybridPipeline(test_config)
+        pipeline._backend = mock_backend
+        pipeline._backend_name = "mock-backend"
+
+        page_errors = []
+
+        class TrackingCallback:
+            def on_conversion_start(self, doc_id: str, total_pages: int) -> None:
+                pass
+
+            def on_page_start(self, page_num: int, total: int) -> None:
+                pass
+
+            def on_page_complete(self, page_num: int, total: int, result) -> None:
+                pass
+
+            def on_page_error(self, page_num: int, error: Exception) -> None:
+                page_errors.append((page_num, str(error)))
+
+            def on_conversion_complete(self, result) -> None:
+                pass
+
+            def on_conversion_error(self, error: Exception) -> None:
+                pass
+
+        callback = TrackingCallback()
+
+        with patch(
+            "docling_hybrid.orchestrator.pipeline.render_page_to_png_bytes",
+            side_effect=RuntimeError("Render failed"),
+        ):
+            result = await pipeline.convert_pdf(
+                pdf_path=sample_pdf_path,
+                progress_callback=callback,
+            )
+
+        # Should have called on_page_error
+        assert len(page_errors) == 1
+        assert page_errors[0][0] == 1
+        assert "Render failed" in page_errors[0][1]
+
+    @pytest.mark.asyncio
+    async def test_conversion_error_callback_invoked(
+        self, test_config, sample_pdf_path, mock_backend
+    ):
+        """Test that on_conversion_error is called when conversion fails."""
+        pipeline = HybridPipeline(test_config)
+
+        conversion_errors = []
+
+        class TrackingCallback:
+            def on_conversion_start(self, doc_id: str, total_pages: int) -> None:
+                pass
+
+            def on_page_start(self, page_num: int, total: int) -> None:
+                pass
+
+            def on_page_complete(self, page_num: int, total: int, result) -> None:
+                pass
+
+            def on_page_error(self, page_num: int, error: Exception) -> None:
+                pass
+
+            def on_conversion_complete(self, result) -> None:
+                pass
+
+            def on_conversion_error(self, error: Exception) -> None:
+                conversion_errors.append(str(error))
+
+        callback = TrackingCallback()
+
+        # Cause an error by using non-existent PDF
+        non_existent_pdf = sample_pdf_path.parent / "non_existent.pdf"
+
+        with pytest.raises(ValidationError):
+            await pipeline.convert_pdf(
+                pdf_path=non_existent_pdf,
+                progress_callback=callback,
+            )
+
+        # Should have called on_conversion_error
+        assert len(conversion_errors) == 1
+        assert "not found" in conversion_errors[0].lower()
