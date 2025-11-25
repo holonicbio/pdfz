@@ -1,53 +1,28 @@
-"""Retry utilities for async operations.
+"""Async retry utilities with exponential backoff.
 
-This module provides utilities for retrying async operations with exponential
-backoff. It's designed for use with HTTP requests and other I/O operations
-that may fail transiently.
+This module provides utilities for retrying async operations with configurable
+exponential backoff, particularly useful for HTTP requests to external APIs.
 
-The retry logic supports:
+Features:
 - Exponential backoff with configurable base and max delay
-- Exception filtering (retry only specific exceptions)
-- Configurable max retries
-- Structured logging of retry attempts
+- Selective exception filtering
+- Retry count limiting
+- Detailed logging of retry attempts
 
-Usage:
-    from docling_hybrid.common.retry import retry_async
-
-    async def fetch_data():
-        async with session.get(url) as response:
-            return await response.json()
-
-    # Retry up to 3 times with exponential backoff
-    result = await retry_async(
-        fetch_data,
-        max_retries=3,
-        initial_delay=1.0,
-        exponential_base=2.0,
-        retryable_exceptions=(aiohttp.ClientError, asyncio.TimeoutError),
-    )
-
-You can also use it as a decorator:
-    from functools import wraps
-    from docling_hybrid.common.retry import retry_async
-
-    def with_retry(**retry_kwargs):
-        def decorator(func):
-            @wraps(func)
-            async def wrapper(*args, **kwargs):
-                return await retry_async(
-                    lambda: func(*args, **kwargs),
-                    **retry_kwargs
-                )
-            return wrapper
-        return decorator
-
-    @with_retry(max_retries=3, initial_delay=1.0)
-    async def fetch_data(url: str):
-        ...
+Example:
+    >>> async def fetch_data():
+    ...     async with session.get(url) as resp:
+    ...         return await resp.json()
+    >>>
+    >>> result = await retry_async(
+    ...     fetch_data,
+    ...     max_retries=3,
+    ...     retryable_exceptions=(aiohttp.ClientError, asyncio.TimeoutError),
+    ... )
 """
 
 import asyncio
-from typing import Any, Awaitable, Callable, TypeVar
+from typing import Any, Awaitable, Callable, Type, TypeVar
 
 from docling_hybrid.common.logging import get_logger
 
@@ -57,187 +32,258 @@ T = TypeVar("T")
 
 
 async def retry_async(
-    func: Callable[[], Awaitable[T]],
+    func: Callable[..., Awaitable[T]],
+    *,
     max_retries: int = 3,
     initial_delay: float = 1.0,
     exponential_base: float = 2.0,
     max_delay: float = 60.0,
-    retryable_exceptions: tuple[type[Exception], ...] = (Exception,),
+    retryable_exceptions: tuple[Type[Exception], ...] = (Exception,),
     context: dict[str, Any] | None = None,
 ) -> T:
     """Retry an async function with exponential backoff.
 
-    This function will call `func` and retry on failure with exponential
-    backoff. The delay between retries increases exponentially:
-    - Attempt 1: initial_delay
-    - Attempt 2: initial_delay * exponential_base
-    - Attempt 3: initial_delay * exponential_base^2
-    - etc.
-
-    The delay is capped at max_delay to prevent excessive waiting.
+    This function attempts to execute an async callable up to `max_retries + 1` times
+    (initial attempt + retries). Between attempts, it waits for an exponentially
+    increasing delay.
 
     Args:
-        func: Async function to retry (takes no arguments, use lambda if needed)
+        func: Async callable to retry
         max_retries: Maximum number of retry attempts (default: 3)
         initial_delay: Initial delay in seconds before first retry (default: 1.0)
-        exponential_base: Base for exponential backoff (default: 2.0)
+        exponential_base: Base for exponential backoff calculation (default: 2.0)
         max_delay: Maximum delay between retries in seconds (default: 60.0)
         retryable_exceptions: Tuple of exception types to retry on (default: all)
-        context: Optional logging context (e.g., {"doc_id": "123", "page": 1})
+        context: Optional context dict for logging (e.g., {"doc_id": "...", "page_num": 1})
 
     Returns:
-        Result of calling func()
+        The result of the successful function call
 
     Raises:
-        The last exception raised by func if all retries are exhausted
-        Non-retryable exceptions are raised immediately
+        The last exception encountered if all retries are exhausted
+        Non-retryable exceptions are propagated immediately
 
     Example:
-        >>> async def fetch_data():
-        ...     async with session.get(url) as response:
-        ...         return await response.json()
+        >>> async def flaky_api_call():
+        ...     # May fail with ClientError
+        ...     return await session.get(url)
         >>>
         >>> result = await retry_async(
-        ...     fetch_data,
+        ...     flaky_api_call,
         ...     max_retries=3,
-        ...     initial_delay=1.0,
-        ...     exponential_base=2.0,
         ...     retryable_exceptions=(aiohttp.ClientError,),
+        ...     context={"endpoint": "/api/ocr"},
         ... )
     """
     context = context or {}
+    delay = initial_delay
     last_exception: Exception | None = None
 
-    for attempt in range(max_retries + 1):  # +1 because first attempt is not a retry
+    for attempt in range(max_retries + 1):
         try:
-            # Try to execute the function
             result = await func()
 
-            # If we get here, it succeeded
+            # Log successful retry if not first attempt
             if attempt > 0:
                 logger.info(
                     "retry_succeeded",
                     attempt=attempt,
-                    max_retries=max_retries,
+                    total_attempts=attempt + 1,
                     **context,
                 )
 
             return result
 
-        except Exception as e:
-            # Check if this exception is retryable
-            if not isinstance(e, retryable_exceptions):
-                # Non-retryable exception, raise immediately
-                logger.debug(
-                    "non_retryable_exception",
-                    exception_type=type(e).__name__,
-                    error=str(e),
-                    **context,
-                )
-                raise
-
+        except retryable_exceptions as e:
             last_exception = e
 
-            # If this was the last attempt, raise the exception
+            # If this is the last attempt, don't wait
             if attempt >= max_retries:
                 logger.error(
                     "retry_exhausted",
-                    attempts=attempt + 1,
                     max_retries=max_retries,
-                    exception_type=type(e).__name__,
+                    total_attempts=attempt + 1,
                     error=str(e),
+                    error_type=type(e).__name__,
                     **context,
                 )
-                raise
+                break
 
-            # Calculate delay with exponential backoff
-            delay = min(initial_delay * (exponential_base ** attempt), max_delay)
-
+            # Log retry attempt
             logger.warning(
                 "retry_attempt",
                 attempt=attempt + 1,
                 max_retries=max_retries,
                 delay_seconds=delay,
-                exception_type=type(e).__name__,
                 error=str(e),
+                error_type=type(e).__name__,
                 **context,
             )
 
             # Wait before retrying
             await asyncio.sleep(delay)
 
-    # This should never be reached, but type checker needs it
+            # Calculate next delay with exponential backoff
+            delay = min(delay * exponential_base, max_delay)
+
+        except Exception as e:
+            # Non-retryable exception - propagate immediately
+            logger.error(
+                "non_retryable_exception",
+                attempt=attempt + 1,
+                error=str(e),
+                error_type=type(e).__name__,
+                **context,
+            )
+            raise
+
+    # All retries exhausted
     if last_exception:
         raise last_exception
-    raise RuntimeError("Unexpected: retry loop exited without result or exception")
+
+    # This should never happen, but make type checker happy
+    raise RuntimeError("retry_async: unexpected state")
 
 
-def should_retry_on_status(status_code: int) -> bool:
-    """Determine if an HTTP status code is retryable.
+async def retry_with_rate_limit(
+    func: Callable[..., Awaitable[T]],
+    *,
+    max_retries: int = 3,
+    initial_delay: float = 1.0,
+    exponential_base: float = 2.0,
+    max_delay: float = 60.0,
+    retryable_exceptions: tuple[Type[Exception], ...] = (Exception,),
+    rate_limit_exception_type: Type[Exception] | None = None,
+    extract_retry_after: Callable[[Exception], float | None] | None = None,
+    context: dict[str, Any] | None = None,
+) -> T:
+    """Retry an async function with rate limit awareness.
 
-    Retryable status codes are:
-    - 408 Request Timeout
-    - 429 Too Many Requests (rate limiting)
-    - 500 Internal Server Error
-    - 502 Bad Gateway
-    - 503 Service Unavailable
-    - 504 Gateway Timeout
-
-    Args:
-        status_code: HTTP status code
-
-    Returns:
-        True if the status code indicates a retryable error
-
-    Example:
-        >>> if response.status != 200:
-        ...     if should_retry_on_status(response.status):
-        ...         # Retry the request
-        ...     else:
-        ...         # Permanent error, don't retry
-    """
-    return status_code in (408, 429, 500, 502, 503, 504)
-
-
-def get_retry_after_delay(headers: dict[str, str], default: float = 60.0) -> float:
-    """Extract retry delay from Retry-After header.
-
-    The Retry-After header can be either:
-    - A number of seconds (integer)
-    - An HTTP date (not currently supported)
+    This is an enhanced version of retry_async that can recognize rate limit
+    exceptions and respect Retry-After hints from the exception or response.
 
     Args:
-        headers: HTTP response headers (case-insensitive dict)
-        default: Default delay if header is missing or invalid
+        func: Async callable to retry
+        max_retries: Maximum number of retry attempts
+        initial_delay: Initial delay in seconds before first retry
+        exponential_base: Base for exponential backoff calculation
+        max_delay: Maximum delay between retries in seconds
+        retryable_exceptions: Tuple of exception types to retry on
+        rate_limit_exception_type: Exception type that indicates rate limiting (e.g., custom 429 error)
+        extract_retry_after: Function to extract retry-after delay from exception
+        context: Optional context dict for logging
 
     Returns:
-        Delay in seconds before retrying
+        The result of the successful function call
+
+    Raises:
+        The last exception encountered if all retries are exhausted
 
     Example:
-        >>> if response.status == 429:
-        ...     delay = get_retry_after_delay(response.headers)
-        ...     await asyncio.sleep(delay)
+        >>> def get_retry_after(exc):
+        ...     # Extract Retry-After from custom exception
+        ...     if hasattr(exc, 'retry_after'):
+        ...         return float(exc.retry_after)
+        ...     return None
+        >>>
+        >>> result = await retry_with_rate_limit(
+        ...     api_call,
+        ...     rate_limit_exception_type=RateLimitError,
+        ...     extract_retry_after=get_retry_after,
+        ... )
     """
-    # Try to get Retry-After header (case-insensitive)
-    retry_after = None
-    for key, value in headers.items():
-        if key.lower() == "retry-after":
-            retry_after = value
-            break
+    context = context or {}
+    delay = initial_delay
+    last_exception: Exception | None = None
 
-    if retry_after is None:
-        return default
+    for attempt in range(max_retries + 1):
+        try:
+            result = await func()
 
-    # Try to parse as integer (seconds)
-    try:
-        delay = int(retry_after)
-        # Sanity check: don't wait more than 5 minutes
-        return min(float(delay), 300.0)
-    except ValueError:
-        # Could be an HTTP date, but we don't support that yet
-        logger.warning(
-            "retry_after_parse_failed",
-            retry_after=retry_after,
-            using_default=default,
-        )
-        return default
+            if attempt > 0:
+                logger.info(
+                    "retry_succeeded",
+                    attempt=attempt,
+                    total_attempts=attempt + 1,
+                    **context,
+                )
+
+            return result
+
+        except retryable_exceptions as e:
+            last_exception = e
+
+            # If this is the last attempt, don't wait
+            if attempt >= max_retries:
+                logger.error(
+                    "retry_exhausted",
+                    max_retries=max_retries,
+                    total_attempts=attempt + 1,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    **context,
+                )
+                break
+
+            # Check if this is a rate limit error with Retry-After hint
+            actual_delay = delay
+            is_rate_limit = (
+                rate_limit_exception_type is not None
+                and isinstance(e, rate_limit_exception_type)
+            )
+
+            if is_rate_limit and extract_retry_after:
+                retry_after = extract_retry_after(e)
+                if retry_after is not None:
+                    actual_delay = min(retry_after, max_delay)
+                    logger.warning(
+                        "rate_limit_retry",
+                        attempt=attempt + 1,
+                        max_retries=max_retries,
+                        retry_after_seconds=actual_delay,
+                        error=str(e),
+                        **context,
+                    )
+                else:
+                    logger.warning(
+                        "rate_limit_retry_no_hint",
+                        attempt=attempt + 1,
+                        max_retries=max_retries,
+                        delay_seconds=actual_delay,
+                        error=str(e),
+                        **context,
+                    )
+            else:
+                logger.warning(
+                    "retry_attempt",
+                    attempt=attempt + 1,
+                    max_retries=max_retries,
+                    delay_seconds=actual_delay,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    **context,
+                )
+
+            # Wait before retrying
+            await asyncio.sleep(actual_delay)
+
+            # Calculate next delay with exponential backoff (unless we used Retry-After)
+            if not (is_rate_limit and extract_retry_after and extract_retry_after(e)):
+                delay = min(delay * exponential_base, max_delay)
+
+        except Exception as e:
+            # Non-retryable exception - propagate immediately
+            logger.error(
+                "non_retryable_exception",
+                attempt=attempt + 1,
+                error=str(e),
+                error_type=type(e).__name__,
+                **context,
+            )
+            raise
+
+    # All retries exhausted
+    if last_exception:
+        raise last_exception
+
+    raise RuntimeError("retry_with_rate_limit: unexpected state")
