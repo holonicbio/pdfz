@@ -1,31 +1,30 @@
-"""OpenRouter Nemotron VLM backend implementation.
+"""DeepSeek vLLM backend implementation.
 
 This module provides a fully functional backend for OCR/VLM operations
-using OpenRouter's API with the Nemotron-nano-12b-v2-vl model.
+using DeepSeek-VL model via a local vLLM server with OpenAI-compatible API.
 
 The backend:
+- Connects to local vLLM server (typically http://localhost:8000)
+- Uses OpenAI-compatible chat completions endpoint
 - Encodes images as base64 data URLs
-- Builds OpenAI-style chat completion requests
 - Handles response parsing (string or list formats)
 - Provides specialized prompts for page, table, and formula extraction
 
 Usage:
     from docling_hybrid.backends import make_backend
-    
+
     config = OcrBackendConfig(
-        name="nemotron-openrouter",
-        model="nvidia/nemotron-nano-12b-v2-vl:free",
-        base_url="https://openrouter.ai/api/v1/chat/completions",
-        api_key=os.environ["OPENROUTER_API_KEY"],
+        name="deepseek-vllm",
+        model="deepseek-ai/deepseek-vl-7b-chat",
+        base_url="http://localhost:8000/v1/chat/completions",
     )
-    
+
     backend = make_backend(config)
     markdown = await backend.page_to_markdown(image_bytes, page_num=1, doc_id="doc-123")
 """
 
 import asyncio
 import base64
-import os
 from typing import Any
 
 import aiohttp
@@ -120,131 +119,124 @@ RULES:
 Output ONLY the LaTeX expression."""
 
 
-class OpenRouterNemotronBackend(OcrVlmBackend):
-    """OCR/VLM backend using OpenRouter API with Nemotron model.
-    
-    This backend communicates with OpenRouter's API to perform OCR
-    using NVIDIA's Nemotron-nano-12b-v2-vl vision-language model.
-    
+class DeepSeekVLLMBackend(OcrVlmBackend):
+    """OCR/VLM backend using DeepSeek-VL via local vLLM server.
+
+    This backend communicates with a vLLM server running the DeepSeek-VL model.
+    The vLLM server provides an OpenAI-compatible API endpoint.
+
     Features:
     - Async HTTP requests for concurrent processing
     - Automatic retry on transient failures
     - Structured logging for debugging
     - Support for page, table, and formula extraction
-    
+    - Health check for server connectivity
+
     Configuration:
-        The backend requires an API key, which can be provided via:
-        1. config.api_key parameter
-        2. OPENROUTER_API_KEY environment variable
-        
-        OpenRouter also recommends setting HTTP-Referer and X-Title headers
-        for identification. These can be provided via:
-        1. config.extra_headers parameter
-        2. DOCLING_HYBRID_HTTP_REFERER and DOCLING_HYBRID_X_TITLE env vars
-    
+        The backend requires a running vLLM server. Start the server with:
+
+        ```bash
+        vllm serve deepseek-ai/deepseek-vl-7b-chat \\
+            --port 8000 \\
+            --max-model-len 4096
+        ```
+
+        Then configure the backend:
+        ```python
+        config = OcrBackendConfig(
+            name="deepseek-vllm",
+            model="deepseek-ai/deepseek-vl-7b-chat",
+            base_url="http://localhost:8000/v1/chat/completions",
+        )
+        ```
+
     Example:
         >>> config = OcrBackendConfig(
-        ...     name="nemotron-openrouter",
-        ...     model="nvidia/nemotron-nano-12b-v2-vl:free",
-        ...     base_url="https://openrouter.ai/api/v1/chat/completions",
-        ...     api_key="sk-...",
+        ...     name="deepseek-vllm",
+        ...     model="deepseek-ai/deepseek-vl-7b-chat",
+        ...     base_url="http://localhost:8000/v1/chat/completions",
         ... )
-        >>> backend = OpenRouterNemotronBackend(config)
+        >>> backend = DeepSeekVLLMBackend(config)
         >>> md = await backend.page_to_markdown(image_bytes, 1, "doc-123")
     """
-    
+
     def __init__(self, config: OcrBackendConfig) -> None:
-        """Initialize the OpenRouter Nemotron backend.
-        
+        """Initialize the DeepSeek vLLM backend.
+
         Args:
             config: Backend configuration
-            
-        Raises:
-            ConfigurationError: If API key is missing
         """
         super().__init__(config)
-        
-        # Get API key from config or environment
-        self.api_key = config.api_key or os.environ.get("OPENROUTER_API_KEY")
-        if not self.api_key:
-            raise ConfigurationError(
-                "Missing OpenRouter API key",
-                details={
-                    "hint": "Set OPENROUTER_API_KEY environment variable or provide api_key in config"
-                }
-            )
-        
+
+        # vLLM typically doesn't require an API key for local deployment
+        # But support it if provided for secured deployments
+        self.api_key = config.api_key
+
         # Build headers
         self.headers = {
-            "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
-        
-        # Add OpenRouter identification headers
-        http_referer = os.environ.get("DOCLING_HYBRID_HTTP_REFERER")
-        x_title = os.environ.get("DOCLING_HYBRID_X_TITLE")
-        
+
+        if self.api_key:
+            self.headers["Authorization"] = f"Bearer {self.api_key}"
+
+        # Add any extra headers
         if config.extra_headers:
             self.headers.update(config.extra_headers)
-        
-        if http_referer:
-            self.headers["HTTP-Referer"] = http_referer
-        if x_title:
-            self.headers["X-Title"] = x_title
-        
+
         # HTTP client (created lazily)
         self._session: aiohttp.ClientSession | None = None
-        
-        # Timeouts (could be made configurable)
-        self._timeout = aiohttp.ClientTimeout(total=180)  # 3 minutes
-        
+
+        # Timeouts (vLLM can be slower for vision models)
+        self._timeout = aiohttp.ClientTimeout(total=300)  # 5 minutes
+
         logger.info(
             "backend_initialized",
             backend=self.name,
             model=config.model,
             base_url=config.base_url,
         )
-    
+
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create HTTP session."""
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession(timeout=self._timeout)
         return self._session
-    
+
     async def close(self) -> None:
         """Close HTTP session."""
         if self._session and not self._session.closed:
             await self._session.close()
             self._session = None
-    
+
     def _encode_image(self, image_bytes: bytes) -> str:
         """Encode image bytes to base64 data URL.
-        
+
         Args:
             image_bytes: PNG image bytes
-            
+
         Returns:
             Base64 data URL for use in API request
         """
         b64 = base64.b64encode(image_bytes).decode("utf-8")
         return f"data:image/png;base64,{b64}"
-    
+
     def _build_messages(
         self,
         prompt: str,
         image_bytes: bytes,
     ) -> list[dict[str, Any]]:
         """Build OpenAI-style messages array with image.
-        
+
         Args:
             prompt: System/user prompt
             image_bytes: PNG image bytes
-            
+
         Returns:
             Messages array for chat completion API
         """
         image_url = self._encode_image(image_bytes)
-        
+
         return [
             {
                 "role": "user",
@@ -262,7 +254,7 @@ class OpenRouterNemotronBackend(OcrVlmBackend):
                 ],
             }
         ]
-    
+
     async def _post_chat_inner(
         self,
         messages: list[dict[str, Any]],
@@ -335,7 +327,6 @@ class OpenRouterNemotronBackend(OcrVlmBackend):
                     )
 
                 # Check for other client errors (4xx) - these are NOT retryable
-                # We do NOT catch BackendResponseError in retry for 4xx
                 if response.status >= 400 and response.status < 500:
                     body = await response.text()
                     # Use a different exception type for non-retryable errors
@@ -496,18 +487,18 @@ class OpenRouterNemotronBackend(OcrVlmBackend):
         )
 
         return content
-    
+
     def _extract_content(self, data: dict[str, Any]) -> str:
         """Extract text content from API response.
-        
+
         Handles both string content and list-of-segments content.
-        
+
         Args:
             data: Parsed JSON response
-            
+
         Returns:
             Extracted text content
-            
+
         Raises:
             BackendResponseError: If response structure is unexpected
         """
@@ -519,21 +510,21 @@ class OpenRouterNemotronBackend(OcrVlmBackend):
                     backend_name=self.name,
                     response_body=str(data)[:500],
                 )
-            
+
             message = choices[0].get("message", {})
             content = message.get("content")
-            
+
             if content is None:
                 raise BackendResponseError(
                     "Response message has no content",
                     backend_name=self.name,
                     response_body=str(data)[:500],
                 )
-            
+
             # Handle string content
             if isinstance(content, str):
                 return content
-            
+
             # Handle list-of-segments content
             if isinstance(content, list):
                 parts = []
@@ -543,13 +534,13 @@ class OpenRouterNemotronBackend(OcrVlmBackend):
                     elif isinstance(segment, str):
                         parts.append(segment)
                 return "".join(parts)
-            
+
             raise BackendResponseError(
                 f"Unexpected content type: {type(content).__name__}",
                 backend_name=self.name,
                 response_body=str(content)[:500],
             )
-            
+
         except KeyError as e:
             raise BackendResponseError(
                 f"Missing expected field in response: {e}",
@@ -558,18 +549,19 @@ class OpenRouterNemotronBackend(OcrVlmBackend):
             ) from e
 
     async def health_check(self) -> bool:
-        """Check if the OpenRouter API is healthy and responsive.
+        """Check if the vLLM server is healthy and responsive.
 
-        Sends a minimal request to verify the API is running and accessible.
+        Sends a minimal request to verify the server is running and accessible.
 
         Returns:
-            True if API is healthy, False otherwise
+            True if server is healthy, False otherwise
         """
         try:
             session = await self._get_session()
 
-            # Simple health check: send a minimal text-only request
-            # This avoids sending image data for health checks
+            # Simple health check: send a minimal request
+            # vLLM OpenAI-compatible API doesn't have a /health endpoint,
+            # so we use a minimal completion request
             payload = {
                 "model": self.config.model,
                 "messages": [{"role": "user", "content": "test"}],
@@ -583,7 +575,7 @@ class OpenRouterNemotronBackend(OcrVlmBackend):
                 timeout=aiohttp.ClientTimeout(total=10),  # Short timeout for health check
             ) as response:
                 # Accept 200 as healthy
-                # Even some 4xx might be OK (e.g., rate limit is still "healthy")
+                # Even 4xx might be OK (e.g., model loading)
                 if response.status < 500:
                     logger.debug(
                         "health_check_passed",
@@ -623,15 +615,15 @@ class OpenRouterNemotronBackend(OcrVlmBackend):
         doc_id: str,
     ) -> str:
         """Convert a full page image to Markdown.
-        
+
         Args:
             image_bytes: PNG image bytes of the rendered page
             page_num: Page number (1-indexed)
             doc_id: Document identifier
-            
+
         Returns:
             Markdown string representing the page content
-            
+
         Raises:
             BackendError: If OCR processing fails
         """
@@ -642,14 +634,14 @@ class OpenRouterNemotronBackend(OcrVlmBackend):
             page_num=page_num,
             image_size_kb=len(image_bytes) // 1024,
         )
-        
+
         messages = self._build_messages(PAGE_TO_MARKDOWN_PROMPT, image_bytes)
-        
+
         content = await self._post_chat(
             messages,
             context={"doc_id": doc_id, "page_num": page_num},
         )
-        
+
         logger.info(
             "page_ocr_completed",
             backend=self.name,
@@ -657,20 +649,20 @@ class OpenRouterNemotronBackend(OcrVlmBackend):
             page_num=page_num,
             markdown_length=len(content),
         )
-        
+
         return content
-    
+
     async def table_to_markdown(
         self,
         image_bytes: bytes,
         meta: dict[str, Any],
     ) -> str:
         """Convert a table image to Markdown table syntax.
-        
+
         Args:
             image_bytes: PNG image bytes of the cropped table
             meta: Metadata (doc_id, page_num, etc.)
-            
+
         Returns:
             Markdown table string
         """
@@ -679,31 +671,31 @@ class OpenRouterNemotronBackend(OcrVlmBackend):
             backend=self.name,
             **meta,
         )
-        
+
         messages = self._build_messages(TABLE_TO_MARKDOWN_PROMPT, image_bytes)
-        
+
         content = await self._post_chat(messages, context=meta)
-        
+
         logger.info(
             "table_ocr_completed",
             backend=self.name,
             table_length=len(content),
             **meta,
         )
-        
+
         return content
-    
+
     async def formula_to_latex(
         self,
         image_bytes: bytes,
         meta: dict[str, Any],
     ) -> str:
         """Convert a formula image to LaTeX.
-        
+
         Args:
             image_bytes: PNG image bytes of the cropped formula
             meta: Metadata (doc_id, page_num, etc.)
-            
+
         Returns:
             LaTeX string (without delimiters)
         """
@@ -712,23 +704,23 @@ class OpenRouterNemotronBackend(OcrVlmBackend):
             backend=self.name,
             **meta,
         )
-        
+
         messages = self._build_messages(FORMULA_TO_LATEX_PROMPT, image_bytes)
-        
+
         content = await self._post_chat(messages, context=meta)
-        
+
         # Clean up any accidental delimiters
         content = content.strip()
         if content.startswith("$$") and content.endswith("$$"):
             content = content[2:-2].strip()
         elif content.startswith("$") and content.endswith("$"):
             content = content[1:-1].strip()
-        
+
         logger.info(
             "formula_ocr_completed",
             backend=self.name,
             latex_length=len(content),
             **meta,
         )
-        
+
         return content
