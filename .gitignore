@@ -92,8 +92,6 @@ openrouter_key
 
 # Project-specific
 configs/secrets.toml
-*.png
-output/
 *.md.bak
 
 # PDFs - ignore all except test PDFs in pdfs/ directory
