@@ -14,6 +14,9 @@ import pytest
 from docling_hybrid.common.config import Config, reset_config
 from docling_hybrid.common.models import OcrBackendConfig
 
+# Import fixtures from utils module
+pytest_plugins = ["tests.utils.async_fixtures"]
+
 
 # ============================================================================
 # Event Loop

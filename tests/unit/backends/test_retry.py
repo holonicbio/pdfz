@@ -16,6 +16,12 @@ from docling_hybrid.common.errors import (
     BackendTimeoutError,
 )
 from docling_hybrid.common.models import OcrBackendConfig
+from tests.utils import (
+    create_mock_aiohttp_response,
+    create_mock_aiohttp_session,
+    create_mock_error_response,
+    create_mock_rate_limit_response,
+)
 
 
 @pytest.fixture
@@ -41,26 +47,22 @@ class TestBackendRetry:
         """Should not retry when request succeeds immediately."""
         backend = OpenRouterNemotronBackend(retry_config)
 
-        # Mock successful response
-        mock_response = {
-            "choices": [{"message": {"content": "Success"}}]
-        }
+        # Create mock response using helper
+        mock_response = create_mock_aiohttp_response(
+            status=200,
+            json_data={"choices": [{"message": {"content": "Success"}}]}
+        )
 
-        with patch.object(backend, "_get_session") as mock_session:
-            mock_resp = AsyncMock()
-            mock_resp.status = 200
-            mock_resp.json = AsyncMock(return_value=mock_response)
-            mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-            mock_resp.__aexit__ = AsyncMock(return_value=None)
+        # Create mock session with the response
+        mock_session = create_mock_aiohttp_session(default_response=mock_response)
 
-            mock_session.return_value.post.return_value = mock_resp
-
+        with patch.object(backend, "_get_session", return_value=mock_session):
             messages = [{"role": "user", "content": "test"}]
             result = await backend._post_chat(messages)
 
             assert result == "Success"
             # Should only be called once (no retries)
-            assert mock_session.return_value.post.call_count == 1
+            assert mock_session.post.call_count == 1
 
         await backend.close()
 
@@ -330,17 +332,15 @@ class TestRateLimitErrorCreation:
         """Should create RateLimitError with Retry-After header."""
         backend = OpenRouterNemotronBackend(retry_config)
 
-        with patch.object(backend, "_get_session") as mock_session:
-            # Mock 429 response with Retry-After header
-            mock_resp = AsyncMock()
-            mock_resp.status = 429
-            mock_resp.headers = {"Retry-After": "5.0"}
-            mock_resp.text = AsyncMock(return_value="Rate limited")
-            mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-            mock_resp.__aexit__ = AsyncMock(return_value=None)
+        # Create mock rate limit response using helper
+        mock_response = create_mock_rate_limit_response(
+            retry_after=5.0,
+            error_message="Rate limited"
+        )
 
-            mock_session.return_value.post.return_value = mock_resp
+        mock_session = create_mock_aiohttp_session(default_response=mock_response)
 
+        with patch.object(backend, "_get_session", return_value=mock_session):
             messages = [{"role": "user", "content": "test"}]
 
             with pytest.raises(RateLimitError) as exc_info:
@@ -357,17 +357,16 @@ class TestRateLimitErrorCreation:
         """Should create RateLimitError without Retry-After header."""
         backend = OpenRouterNemotronBackend(retry_config)
 
-        with patch.object(backend, "_get_session") as mock_session:
-            # Mock 429 response without Retry-After header
-            mock_resp = AsyncMock()
-            mock_resp.status = 429
-            mock_resp.headers = {}
-            mock_resp.text = AsyncMock(return_value="Rate limited")
-            mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-            mock_resp.__aexit__ = AsyncMock(return_value=None)
+        # Create mock 429 response without Retry-After header
+        mock_response = create_mock_aiohttp_response(
+            status=429,
+            text_data="Rate limited",
+            headers={}
+        )
 
-            mock_session.return_value.post.return_value = mock_resp
+        mock_session = create_mock_aiohttp_session(default_response=mock_response)
 
+        with patch.object(backend, "_get_session", return_value=mock_session):
             messages = [{"role": "user", "content": "test"}]
 
             with pytest.raises(RateLimitError) as exc_info:
@@ -383,17 +382,16 @@ class TestRateLimitErrorCreation:
         """Should handle invalid Retry-After header gracefully."""
         backend = OpenRouterNemotronBackend(retry_config)
 
-        with patch.object(backend, "_get_session") as mock_session:
-            # Mock 429 response with invalid Retry-After header
-            mock_resp = AsyncMock()
-            mock_resp.status = 429
-            mock_resp.headers = {"Retry-After": "invalid"}
-            mock_resp.text = AsyncMock(return_value="Rate limited")
-            mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-            mock_resp.__aexit__ = AsyncMock(return_value=None)
+        # Create mock 429 response with invalid Retry-After header
+        mock_response = create_mock_aiohttp_response(
+            status=429,
+            text_data="Rate limited",
+            headers={"Retry-After": "invalid"}
+        )
 
-            mock_session.return_value.post.return_value = mock_resp
+        mock_session = create_mock_aiohttp_session(default_response=mock_response)
 
+        with patch.object(backend, "_get_session", return_value=mock_session):
             messages = [{"role": "user", "content": "test"}]
 
             with pytest.raises(RateLimitError) as exc_info:
