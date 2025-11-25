@@ -27,7 +27,7 @@ def retry_config():
         base_url="https://openrouter.ai/api/v1/chat/completions",
         api_key="test-key",
         max_retries=3,
-        retry_initial_delay=0.01,  # Fast retries for tests
+        retry_initial_delay=0.1,  # Minimum allowed by model validation
         retry_exponential_base=2.0,
         retry_max_delay=1.0,
     )

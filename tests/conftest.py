@@ -53,18 +53,21 @@ def test_config_dict() -> dict:
         },
         "backends": {
             "default": "nemotron-openrouter",
-            "nemotron-openrouter": {
-                "name": "nemotron-openrouter",
-                "model": "nvidia/nemotron-nano-12b-v2-vl:free",
-                "base_url": "https://openrouter.ai/api/v1/chat/completions",
-                "temperature": 0.0,
-                "max_tokens": 1024,
+            "configs": {
+                "nemotron-openrouter": {
+                    "name": "nemotron-openrouter",
+                    "model": "nvidia/nemotron-nano-12b-v2-vl:free",
+                    "base_url": "https://openrouter.ai/api/v1/chat/completions",
+                    "api_key": "test-api-key",
+                    "temperature": 0.0,
+                    "max_tokens": 1024,
+                },
             },
         },
         "output": {
             "format": "markdown",
             "add_page_separators": False,
-            "page_separator": "",
+            "page_separator": "\n\n---\n\n<!-- Page {page_num} -->\n\n",
         },
         "docling": {
             "do_ocr": False,

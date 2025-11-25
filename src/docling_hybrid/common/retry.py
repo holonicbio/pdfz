@@ -76,7 +76,7 @@ async def retry_async(
         ... )
     """
     context = context or {}
-    delay = initial_delay
+    delay = min(initial_delay, max_delay)  # Cap initial delay at max_delay
     last_exception: Exception | None = None
 
     for attempt in range(max_retries + 1):
@@ -193,7 +193,7 @@ async def retry_with_rate_limit(
         ... )
     """
     context = context or {}
-    delay = initial_delay
+    delay = min(initial_delay, max_delay)  # Cap initial delay at max_delay
     last_exception: Exception | None = None
 
     for attempt in range(max_retries + 1):
@@ -287,3 +287,82 @@ async def retry_with_rate_limit(
         raise last_exception
 
     raise RuntimeError("retry_with_rate_limit: unexpected state")
+
+
+# HTTP status codes that indicate retryable errors
+RETRYABLE_STATUS_CODES = {
+    408,  # Request Timeout
+    429,  # Too Many Requests
+    500,  # Internal Server Error
+    502,  # Bad Gateway
+    503,  # Service Unavailable
+    504,  # Gateway Timeout
+}
+
+
+def should_retry_on_status(status_code: int) -> bool:
+    """Determine if an HTTP status code indicates a retryable error.
+
+    Args:
+        status_code: HTTP status code to check
+
+    Returns:
+        True if the status code indicates a transient error that may succeed on retry,
+        False otherwise
+
+    Example:
+        >>> should_retry_on_status(503)  # Service Unavailable
+        True
+        >>> should_retry_on_status(404)  # Not Found
+        False
+        >>> should_retry_on_status(429)  # Rate limited
+        True
+    """
+    return status_code in RETRYABLE_STATUS_CODES
+
+
+def get_retry_after_delay(
+    headers: dict[str, str],
+    default: float = 30.0,
+    max_delay: float = 300.0,
+) -> float:
+    """Extract retry delay from HTTP Retry-After header.
+
+    Parses the Retry-After header to determine how long to wait before retrying.
+    Currently supports integer seconds format. HTTP date format falls back to default.
+
+    Args:
+        headers: HTTP response headers (case-insensitive lookup)
+        default: Default delay in seconds if header is missing or invalid
+        max_delay: Maximum delay in seconds (caps the returned value)
+
+    Returns:
+        Delay in seconds to wait before retrying
+
+    Example:
+        >>> headers = {"Retry-After": "60"}
+        >>> get_retry_after_delay(headers)
+        60.0
+
+        >>> headers = {"Content-Type": "application/json"}
+        >>> get_retry_after_delay(headers, default=30.0)
+        30.0
+    """
+    # Case-insensitive header lookup
+    retry_after = None
+    for key, value in headers.items():
+        if key.lower() == "retry-after":
+            retry_after = value
+            break
+
+    if retry_after is None:
+        return default
+
+    try:
+        # Try to parse as integer seconds
+        delay = float(retry_after)
+        # Cap at max_delay
+        return min(delay, max_delay)
+    except (ValueError, TypeError):
+        # Could be HTTP date format or invalid - use default
+        return default

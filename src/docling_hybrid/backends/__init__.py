@@ -24,7 +24,7 @@ Usage:
 """
 
 from docling_hybrid.backends.base import OcrVlmBackend
-from docling_hybrid.backends.factory import make_backend
+from docling_hybrid.backends.factory import list_backends, make_backend, register_backend
 from docling_hybrid.backends.openrouter_nemotron import OpenRouterNemotronBackend
 
 # Stubs are imported but raise NotImplementedError when used
@@ -36,6 +36,8 @@ __all__ = [
     "OcrVlmBackend",
     # Factory
     "make_backend",
+    "list_backends",
+    "register_backend",
     # Implementations
     "OpenRouterNemotronBackend",
     # Stubs

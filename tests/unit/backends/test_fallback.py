@@ -43,21 +43,21 @@ class MockBackend(OcrVlmBackend):
         self.call_count = 0
         self.close_called = False
 
-    async def page_to_markdown(self, image_bytes: bytes, page_num: int, doc_id: str) -> str:
+    async def page_to_markdown(self, image_bytes: bytes, page_num: int, doc_id: str, **kwargs) -> str:
         """Mock page_to_markdown."""
         self.call_count += 1
         if self.should_fail:
             raise BackendConnectionError("Mock connection error", backend_name=self.name)
         return f"# Page {page_num} from {self.name}"
 
-    async def table_to_markdown(self, image_bytes: bytes, meta: dict) -> str:
+    async def table_to_markdown(self, image_bytes: bytes, meta: dict, **kwargs) -> str:
         """Mock table_to_markdown."""
         self.call_count += 1
         if self.should_fail:
             raise BackendTimeoutError("Mock timeout", backend_name=self.name)
         return f"| Table from {self.name} |"
 
-    async def formula_to_latex(self, image_bytes: bytes, meta: dict) -> str:
+    async def formula_to_latex(self, image_bytes: bytes, meta: dict, **kwargs) -> str:
         """Mock formula_to_latex."""
         self.call_count += 1
         if self.should_fail:
@@ -400,11 +400,11 @@ async def test_get_healthy_backend_no_health_check():
     """Test with backend that doesn't have health_check method."""
     # Create minimal backend without health_check
     class MinimalBackend(OcrVlmBackend):
-        async def page_to_markdown(self, image_bytes, page_num, doc_id):
+        async def page_to_markdown(self, image_bytes, page_num, doc_id, **kwargs):
             return "test"
-        async def table_to_markdown(self, image_bytes, meta):
+        async def table_to_markdown(self, image_bytes, meta, **kwargs):
             return "test"
-        async def formula_to_latex(self, image_bytes, meta):
+        async def formula_to_latex(self, image_bytes, meta, **kwargs):
             return "test"
 
     config = OcrBackendConfig(
@@ -461,11 +461,11 @@ async def test_close(primary_backend, fallback_backend):
 async def test_close_with_error():
     """Test closing when a backend raises error."""
     class ErrorBackend(OcrVlmBackend):
-        async def page_to_markdown(self, image_bytes, page_num, doc_id):
+        async def page_to_markdown(self, image_bytes, page_num, doc_id, **kwargs):
             return "test"
-        async def table_to_markdown(self, image_bytes, meta):
+        async def table_to_markdown(self, image_bytes, meta, **kwargs):
             return "test"
-        async def formula_to_latex(self, image_bytes, meta):
+        async def formula_to_latex(self, image_bytes, meta, **kwargs):
             return "test"
         async def close(self):
             raise RuntimeError("Close error")
@@ -520,7 +520,7 @@ async def test_chain_with_three_backends(sample_image):
 async def test_chain_auth_error_no_fallback(sample_image):
     """Test that auth errors don't trigger fallback."""
     class AuthErrorBackend(MockBackend):
-        async def page_to_markdown(self, image_bytes, page_num, doc_id):
+        async def page_to_markdown(self, image_bytes, page_num, doc_id, **kwargs):
             self.call_count += 1
             raise BackendResponseError(
                 "Unauthorized",
