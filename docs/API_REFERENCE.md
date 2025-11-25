@@ -169,6 +169,7 @@ async def convert_pdf(
     pdf_path: Path,
     output_path: Path | None = None,
     options: ConversionOptions | None = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> ConversionResult
 ```
 
@@ -176,6 +177,7 @@ async def convert_pdf(
 - `pdf_path` (Path): Path to input PDF file
 - `output_path` (Path | None): Optional output file path. If None, no file is written.
 - `options` (ConversionOptions | None): Conversion options. If None, uses defaults.
+- `progress_callback` (ProgressCallback | None): Optional callback for progress updates. See [Progress Callbacks](#progress-callbacks).
 
 **Returns:**
 - `ConversionResult`: Conversion result with markdown content and metadata
@@ -189,7 +191,7 @@ async def convert_pdf(
 ```python
 from pathlib import Path
 
-# Basic conversion
+# Basic conversion with OpenRouter
 result = await pipeline.convert_pdf(Path("document.pdf"))
 print(result.markdown)
 
@@ -206,6 +208,14 @@ result = await pipeline.convert_pdf(
     Path("document.pdf"),
     options=options
 )
+
+# With progress callback
+from docling_hybrid.orchestrator.callbacks import ConsoleProgressCallback
+callback = ConsoleProgressCallback(verbose=True)
+result = await pipeline.convert_pdf(
+    Path("document.pdf"),
+    progress_callback=callback
+)
 ```
 
 ---
@@ -219,17 +229,21 @@ Configuration for a single conversion.
 **Class:**
 ```python
 class ConversionOptions(BaseModel):
+    backend_name: str | None = None
     max_pages: int | None = None
-    start_page: int = 0
-    dpi: int = 200
-    include_page_separators: bool = True
+    start_page: int = 1
+    dpi: int | None = None
+    add_page_separators: bool = True
+    page_separator_format: str = "<!-- PAGE {page_num} -->\n\n"
 ```
 
 **Fields:**
+- `backend_name` (str | None): Backend to use. None = use default from config.
 - `max_pages` (int | None): Maximum pages to process. None = all pages.
-- `start_page` (int): Starting page index (0-indexed). Default: 0
-- `dpi` (int): Rendering DPI. Higher = better quality, more memory. Default: 200
-- `include_page_separators` (bool): Add `<!-- PAGE N -->` comments. Default: True
+- `start_page` (int): Starting page number (1-indexed). Default: 1
+- `dpi` (int | None): Rendering DPI. None = use config value. Higher = better quality, more memory. Range: 72-600
+- `add_page_separators` (bool): Add `<!-- PAGE N -->` comments. Default: True
+- `page_separator_format` (str): Format string for page separators. Default: `"<!-- PAGE {page_num} -->\n\n"`
 
 **Example:**
 ```python
@@ -238,9 +252,17 @@ from docling_hybrid.orchestrator import ConversionOptions
 # Process first 10 pages at lower DPI
 options = ConversionOptions(
     max_pages=10,
-    start_page=0,
+    start_page=1,
     dpi=150,
-    include_page_separators=True
+    add_page_separators=True
+)
+
+# Process pages 5-10 with custom backend
+options = ConversionOptions(
+    backend_name="nemotron-openrouter",
+    start_page=5,
+    max_pages=6,
+    dpi=200
 )
 ```
 
@@ -736,6 +758,134 @@ print(config.backends.default)
 
 ---
 
+## Progress Callbacks
+
+### ProgressCallback Protocol
+
+Protocol for receiving progress updates during conversion.
+
+**Methods:**
+```python
+class ProgressCallback(Protocol):
+    def on_conversion_start(self, doc_id: str, total_pages: int) -> None:
+        """Called when conversion starts."""
+
+    def on_page_start(self, page_num: int, total: int) -> None:
+        """Called when a page starts processing."""
+
+    def on_page_complete(self, page_num: int, total: int, result: PageResult) -> None:
+        """Called when a page completes successfully."""
+
+    def on_page_error(self, page_num: int, error: Exception) -> None:
+        """Called when a page fails."""
+
+    def on_conversion_complete(self, result: ConversionResult) -> None:
+        """Called when conversion completes successfully."""
+
+    def on_conversion_error(self, error: Exception) -> None:
+        """Called when conversion fails."""
+```
+
+---
+
+### ConsoleProgressCallback
+
+Rich console progress display with progress bar.
+
+**Constructor:**
+```python
+class ConsoleProgressCallback:
+    def __init__(
+        self,
+        console: Console | None = None,
+        verbose: bool = False
+    ) -> None
+```
+
+**Parameters:**
+- `console` (Console | None): Rich Console instance (creates new if None)
+- `verbose` (bool): Show detailed per-page information
+
+**Example:**
+```python
+from docling_hybrid.orchestrator.callbacks import ConsoleProgressCallback
+
+# Basic console progress
+callback = ConsoleProgressCallback()
+result = await pipeline.convert_pdf(pdf_path, progress_callback=callback)
+
+# Verbose mode (shows each page)
+callback = ConsoleProgressCallback(verbose=True)
+result = await pipeline.convert_pdf(pdf_path, progress_callback=callback)
+```
+
+---
+
+### FileProgressCallback
+
+Write JSON progress events to a file for monitoring.
+
+**Constructor:**
+```python
+class FileProgressCallback:
+    def __init__(
+        self,
+        file_path: Path,
+        append: bool = True
+    ) -> None
+```
+
+**Parameters:**
+- `file_path` (Path): Path to write progress events
+- `append` (bool): If True, append to existing file; if False, overwrite
+
+**Example:**
+```python
+from pathlib import Path
+from docling_hybrid.orchestrator.callbacks import FileProgressCallback
+
+# Log progress to file
+callback = FileProgressCallback(Path("progress.log"))
+result = await pipeline.convert_pdf(pdf_path, progress_callback=callback)
+
+# File contents (JSON lines):
+# {"timestamp": 1234567890.0, "event": "conversion_start", "doc_id": "doc-abc", ...}
+# {"timestamp": 1234567892.0, "event": "page_complete", "page_num": 1, ...}
+```
+
+---
+
+### CompositeProgressCallback
+
+Combine multiple callbacks (e.g., console + file logging).
+
+**Constructor:**
+```python
+class CompositeProgressCallback:
+    def __init__(self, callbacks: list[Any]) -> None
+```
+
+**Parameters:**
+- `callbacks` (list): List of callback instances
+
+**Example:**
+```python
+from docling_hybrid.orchestrator.callbacks import (
+    ConsoleProgressCallback,
+    FileProgressCallback,
+    CompositeProgressCallback,
+)
+
+# Combine console and file logging
+console = ConsoleProgressCallback(verbose=True)
+file = FileProgressCallback(Path("progress.log"))
+composite = CompositeProgressCallback([console, file])
+
+result = await pipeline.convert_pdf(pdf_path, progress_callback=composite)
+```
+
+---
+
 ## Logging
 
 ### get_logger()
@@ -839,5 +989,5 @@ if __name__ == "__main__":
 
 ---
 
-*Last Updated: 2024-11-25*
-*Version: Sprint 2*
+*Last Updated: 2025-11-25*
+*Version: Sprint 3 - Production Readiness*

@@ -1,0 +1,39 @@
+# MANIFEST.in - Additional files to include in source distribution
+
+# Documentation
+include README.md
+include CHANGELOG.md
+include LICENSE
+include CLAUDE.md
+include CONTINUATION.md
+include LOCAL_DEV.md
+
+# Configuration examples
+include .env.example
+recursive-include configs *.toml
+
+# Documentation directory
+recursive-include docs *.md
+
+# Example scripts
+recursive-include examples *.py
+include examples/README.md
+
+# Scripts
+recursive-include scripts *.sh *.py
+
+# Exclude development and build artifacts
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude *.pyd
+global-exclude __pycache__
+global-exclude .DS_Store
+global-exclude *.so
+global-exclude .git*
+global-exclude .env.local
+global-exclude openrouter_key
+
+# Exclude test files from distribution
+prune tests
+prune .github
+prune .venv

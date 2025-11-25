@@ -54,17 +54,50 @@ On Windows:
 .venv\Scripts\activate
 ```
 
-### Step 4: Get an API Key
+### Step 4: Get an OpenRouter API Key
 
-1. Go to [OpenRouter](https://openrouter.ai)
-2. Sign up for a free account
-3. Generate an API key
-4. Copy the key (starts with `sk-...`)
+**OpenRouter** is the recommended backend for Docling Hybrid OCR. It provides:
+- ✅ Free tier available (with rate limits)
+- ✅ No GPU required (cloud-based)
+- ✅ Multiple VLM models to choose from
+- ✅ Works on any platform (Windows, Mac, Linux)
+
+**To get your API key:**
+
+1. Visit [OpenRouter](https://openrouter.ai)
+2. Click "Sign Up" and create a free account
+3. Navigate to "API Keys" in your dashboard
+4. Click "Create Key" and give it a name (e.g., "docling-hybrid")
+5. Copy the key - it starts with `sk-or-v1-...`
+6. **Important:** Save the key securely - you won't be able to see it again!
+
+**Free Tier Limits:**
+- The free tier includes models like Nemotron Nano (our default)
+- Sufficient for testing and small-scale use
+- For production use, consider upgrading to a paid tier
 
 ### Step 5: Configure Your API Key
 
+**Method 1: Using openrouter_key file (Recommended)**
+
+This is the simplest method for local development:
+
 ```bash
-# Create environment file
+# Create the key file
+echo 'sk-or-v1-your-actual-key-here' > openrouter_key
+
+# Source the environment setup script
+source ./scripts/setup_env.sh
+```
+
+The setup script will automatically read your key and export it.
+
+**Method 2: Using .env.local file**
+
+For more configuration options:
+
+```bash
+# Create environment file from example
 cp .env.example .env.local
 
 # Edit the file
@@ -73,7 +106,7 @@ nano .env.local  # or use your preferred editor
 
 Add your API key:
 ```bash
-OPENROUTER_API_KEY=sk-your-key-here
+OPENROUTER_API_KEY=sk-or-v1-your-actual-key-here
 DOCLING_HYBRID_CONFIG=configs/local.toml
 DOCLING_HYBRID_LOG_LEVEL=INFO
 ```
@@ -83,8 +116,22 @@ Load the environment:
 source .env.local
 ```
 
+**Method 3: Direct export (Quick testing)**
+
+```bash
+export OPENROUTER_API_KEY=sk-or-v1-your-actual-key-here
+```
+
+**Verify your API key is set:**
+
+```bash
+echo $OPENROUTER_API_KEY
+# Should display: sk-or-v1-...
+```
+
 ### Step 6: Verify Installation
 
+**Check CLI version:**
 ```bash
 docling-hybrid-ocr --version
 ```
@@ -94,13 +141,33 @@ Expected output:
 docling-hybrid-ocr version 0.1.0
 ```
 
+**Check available backends:**
+```bash
+docling-hybrid-ocr backends
+```
+
+Expected output:
+```
+Available backends:
+  ✓ nemotron-openrouter (default) - OpenRouter with Nemotron Nano VLM
+  ○ deepseek-vllm - DeepSeek OCR via vLLM (not configured)
+  ○ deepseek-mlx - DeepSeek OCR via MLX (not configured)
+```
+
+**Verify your API key is configured:**
+```bash
+docling-hybrid-ocr info
+```
+
+This will show your configuration including whether the API key is set.
+
 ---
 
 ## Your First Conversion
 
 ### Command Line Usage
 
-Convert a PDF to Markdown:
+Convert a PDF to Markdown using OpenRouter:
 
 ```bash
 docling-hybrid-ocr convert document.pdf
@@ -108,23 +175,46 @@ docling-hybrid-ocr convert document.pdf
 
 This will:
 1. Read `document.pdf`
-2. Convert each page to Markdown
-3. Save result as `document.md` in the same directory
+2. Render each page as an image (PNG format, 200 DPI)
+3. Send images to OpenRouter's Nemotron Nano VLM
+4. Receive Markdown output for each page
+5. Combine pages and save as `document.md` in the same directory
+
+**What you'll see:**
+
+```
+Converting document.pdf...
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 10/10 100% 0:00:42
+✓ Conversion complete!
+  Processed: 10/10 pages
+  Time: 42.3s (0.24 pages/s)
+  Output: document.md
+```
 
 **With custom output:**
 ```bash
 docling-hybrid-ocr convert document.pdf --output result.md
 ```
 
-**Process only first 5 pages:**
+**Process only first 5 pages (recommended for testing):**
 ```bash
 docling-hybrid-ocr convert document.pdf --max-pages 5
 ```
 
-**Lower DPI for faster processing:**
+**Lower DPI for faster processing (uses less API credits):**
 ```bash
 docling-hybrid-ocr convert document.pdf --dpi 150
 ```
+
+**Verbose output (shows each page):**
+```bash
+docling-hybrid-ocr convert document.pdf --verbose
+```
+
+**OpenRouter Tips:**
+- Start with `--max-pages 5` to test before converting large documents
+- Use `--dpi 150` if you're on the free tier to process more pages
+- Monitor your usage at https://openrouter.ai/activity
 
 ### Python API Usage
 
@@ -134,31 +224,63 @@ Create a file `convert.py`:
 import asyncio
 from pathlib import Path
 from docling_hybrid import init_config, HybridPipeline
+from docling_hybrid.orchestrator.callbacks import ConsoleProgressCallback
 
 async def main():
-    # Initialize configuration
+    # Initialize configuration (loads OpenRouter API key from env)
     config = init_config(Path("configs/local.toml"))
 
-    # Create pipeline
+    # Create pipeline (uses nemotron-openrouter backend by default)
     pipeline = HybridPipeline(config)
 
-    # Convert PDF
+    # Create progress callback for live updates
+    progress = ConsoleProgressCallback(verbose=True)
+
+    # Convert PDF with OpenRouter
     result = await pipeline.convert_pdf(
         pdf_path=Path("document.pdf"),
-        output_path=Path("output.md")
+        output_path=Path("output.md"),
+        progress_callback=progress
     )
 
-    # Print result
-    print(f"✓ Converted {result.processed_pages} pages")
+    # Print result summary
+    print(f"\n✓ Converted {result.processed_pages}/{result.total_pages} pages")
+    print(f"✓ Backend: {result.backend_name}")
     print(f"✓ Saved to {result.output_path}")
 
+    # Access individual page results
+    for page_result in result.page_results:
+        print(f"  Page {page_result.page_num}: {len(page_result.content)} chars")
+
 # Run
-asyncio.run(main())
+if __name__ == "__main__":
+    asyncio.run(main())
 ```
 
 Run it:
 ```bash
 python convert.py
+```
+
+**Expected output:**
+```
+Starting conversion - 10 pages
+  Processing page 1/10...
+    ✓ Page 1 complete (1234 chars)
+  Processing page 2/10...
+    ✓ Page 2 complete (2345 chars)
+...
+✓ Conversion complete!
+  Processed: 10/10 pages
+  Time: 42.3s (0.24 pages/s)
+  Output: output.md
+
+✓ Converted 10/10 pages
+✓ Backend: nemotron-openrouter
+✓ Saved to output.md
+  Page 1: 1234 chars
+  Page 2: 2345 chars
+  ...
 ```
 
 ---
@@ -638,5 +760,5 @@ That's it! You're now ready to convert PDFs to Markdown. 🎉
 
 ---
 
-*Last Updated: 2024-11-25*
-*Version: Sprint 2*
+*Last Updated: 2025-11-25*
+*Version: Sprint 3 - Production Readiness with OpenRouter*

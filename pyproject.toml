@@ -9,20 +9,43 @@ build-backend = "hatchling.build"
 name = "docling-hybrid-ocr"
 version = "0.1.0"
 description = "Hybrid PDF to Markdown conversion using Docling and VLM backends"
-readme = "README.md"
+readme = {file = "README.md", content-type = "text/markdown"}
 requires-python = ">=3.11"
 license = {text = "MIT"}
 authors = [
-    {name = "Docling Hybrid Team"},
+    {name = "Docling Hybrid Team", email = "info@docling-hybrid.org"},
 ]
-keywords = ["pdf", "ocr", "vlm", "markdown", "docling"]
+maintainers = [
+    {name = "Docling Hybrid Team", email = "info@docling-hybrid.org"},
+]
+keywords = [
+    "pdf",
+    "ocr",
+    "vlm",
+    "vision-language-model",
+    "markdown",
+    "docling",
+    "openrouter",
+    "nemotron",
+    "deepseek",
+    "document-processing",
+    "pdf-conversion",
+    "pdf-to-markdown"
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3 :: Only",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Topic :: Text Processing :: General",
+    "Topic :: Text Processing :: Markup :: Markdown",
+    "Typing :: Typed",
 ]
 
 dependencies = [
@@ -83,9 +106,12 @@ docling-hybrid-ocr = "docling_hybrid.cli.main:app"
 
 [project.urls]
 Homepage = "https://github.com/docling-hybrid/docling-hybrid-ocr"
-Documentation = "https://github.com/docling-hybrid/docling-hybrid-ocr#readme"
+Documentation = "https://github.com/docling-hybrid/docling-hybrid-ocr/tree/main/docs"
 Repository = "https://github.com/docling-hybrid/docling-hybrid-ocr"
-Issues = "https://github.com/docling-hybrid/docling-hybrid-ocr/issues"
+"Issue Tracker" = "https://github.com/docling-hybrid/docling-hybrid-ocr/issues"
+"Bug Reports" = "https://github.com/docling-hybrid/docling-hybrid-ocr/issues"
+Changelog = "https://github.com/docling-hybrid/docling-hybrid-ocr/blob/main/CHANGELOG.md"
+"Source Code" = "https://github.com/docling-hybrid/docling-hybrid-ocr"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/docling_hybrid"]
