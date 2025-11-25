@@ -77,6 +77,7 @@ ipython_config.py
 .env
 .env.local
 *.key
+openrouter_key
 
 # IDEs
 .vscode/
@@ -91,10 +92,14 @@ ipython_config.py
 
 # Project-specific
 configs/secrets.toml
-*.pdf
 *.png
 output/
 *.md.bak
+
+# PDFs - ignore all except test PDFs in pdfs/ directory
+/*.pdf
+**/*.pdf
+!pdfs/*.pdf
 
 # Distribution / packaging
 *.whl

@@ -196,6 +196,25 @@ DOCLING_HYBRID_LOG_LEVEL=DEBUG
 DOCLING_HYBRID_MAX_WORKERS=2
 ```
 
+### Quick Setup: OpenRouter API Key
+
+The easiest way to set up your API key:
+
+```bash
+# Create the key file (add to .gitignore, never commit!)
+echo 'sk-or-v1-your-key-here' > openrouter_key
+
+# Source the environment setup
+source ./scripts/setup_env.sh
+```
+
+This reads the key from `openrouter_key` file and exports `OPENROUTER_API_KEY`.
+
+**Optional:** Install git hooks to remind you about environment setup:
+```bash
+./scripts/install-hooks.sh
+```
+
 ---
 
 ## Development Workflow
@@ -207,11 +226,18 @@ git clone <repo>
 cd docling-hybrid-ocr
 ./scripts/setup.sh
 
-# Activate and configure
+# Activate virtual environment
 source .venv/bin/activate
+
+# Set up API key (choose one method):
+
+# Method 1: Using openrouter_key file (recommended)
+echo 'sk-or-v1-your-key-here' > openrouter_key
+source ./scripts/setup_env.sh
+
+# Method 2: Using .env.local
 cp .env.example .env.local
 # Edit .env.local with your OPENROUTER_API_KEY
-
 source .env.local
 ```
 
