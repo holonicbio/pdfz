@@ -34,6 +34,10 @@ from docling_hybrid.common.errors import (
 from docling_hybrid.common.logging import setup_logging
 from docling_hybrid.orchestrator import ConversionOptions, HybridPipeline
 
+# Import batch processing
+from docling_hybrid.cli.batch import convert_batch, find_pdf_files
+from docling_hybrid.cli.progress_display import BatchProgressDisplay, print_batch_summary
+
 # Create Typer app
 app = typer.Typer(
     name="docling-hybrid-ocr",
@@ -455,29 +459,192 @@ def backends() -> None:
 @app.command()
 def info() -> None:
     """Show system information and configuration.
-    
+
     Displays version, configuration paths, and environment status.
     """
     import os
-    
+
     console.print("[bold]Docling Hybrid OCR[/bold]")
     console.print(f"Version: {__version__}")
     console.print()
-    
+
     # Check API key
     api_key = os.environ.get("OPENROUTER_API_KEY")
     key_status = "[green]✓ Set[/green]" if api_key else "[red]✗ Not set[/red]"
     console.print(f"OPENROUTER_API_KEY: {key_status}")
-    
+
     # Check config file
     config_env = os.environ.get("DOCLING_HYBRID_CONFIG")
     if config_env:
         console.print(f"Config file: {config_env}")
     else:
         console.print("Config file: [dim]Using defaults[/dim]")
-    
+
     console.print()
     console.print("[dim]Set OPENROUTER_API_KEY environment variable to use the Nemotron backend.[/dim]")
+
+
+@app.command(name="convert-batch")
+def convert_batch_command(
+    input_dir: Path = typer.Argument(
+        ...,
+        help="Directory containing PDF files",
+        exists=True,
+        file_okay=False,
+        dir_okay=True,
+        readable=True,
+    ),
+    output_dir: Path = typer.Option(
+        "./output",
+        "--output-dir",
+        "-o",
+        help="Output directory for converted files",
+    ),
+    backend: Optional[str] = typer.Option(
+        None,
+        "--backend",
+        "-b",
+        help="Backend to use (default: from config)",
+    ),
+    config_file: Optional[Path] = typer.Option(
+        None,
+        "--config",
+        "-c",
+        help="Path to configuration file",
+        exists=True,
+    ),
+    parallel: int = typer.Option(
+        4,
+        "--parallel",
+        "-p",
+        help="Number of files to process in parallel",
+        min=1,
+        max=16,
+    ),
+    recursive: bool = typer.Option(
+        False,
+        "--recursive",
+        "-r",
+        help="Search for PDFs recursively in subdirectories",
+    ),
+    pattern: str = typer.Option(
+        "*.pdf",
+        "--pattern",
+        help="Glob pattern for matching PDF files",
+    ),
+    dpi: Optional[int] = typer.Option(
+        None,
+        "--dpi",
+        help="Page rendering DPI (default: from config)",
+        min=72,
+        max=600,
+    ),
+    max_pages: Optional[int] = typer.Option(
+        None,
+        "--max-pages",
+        "-n",
+        help="Maximum pages to process per file (default: all)",
+        min=1,
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-V",
+        help="Enable verbose logging",
+    ),
+) -> None:
+    """Convert multiple PDF files in batch mode.
+
+    Scans a directory for PDF files and converts them in parallel.
+    Each PDF is converted to a separate Markdown file in the output directory.
+
+    Examples:
+
+        # Convert all PDFs in a directory
+        docling-hybrid-ocr convert-batch ./pdfs/ --output-dir ./output/
+
+        # Recursive search with custom pattern
+        docling-hybrid-ocr convert-batch ./docs/ -r --pattern "report_*.pdf"
+
+        # Control parallelism
+        docling-hybrid-ocr convert-batch ./pdfs/ --parallel 8
+
+        # Limit pages per file
+        docling-hybrid-ocr convert-batch ./pdfs/ --max-pages 5
+    """
+    try:
+        # Initialize configuration
+        config = init_config(config_file)
+
+        # Setup logging
+        log_level = "DEBUG" if verbose else config.logging.level
+        log_format = "text"  # Always use text for CLI
+        setup_logging(level=log_level, format=log_format)
+
+        # Find PDF files
+        console.print(f"\n[bold blue]Scanning:[/bold blue] {input_dir}")
+        console.print(f"[dim]Pattern: {pattern}, Recursive: {recursive}[/dim]")
+
+        try:
+            pdf_files = find_pdf_files(input_dir, pattern=pattern, recursive=recursive)
+        except ValueError as e:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+            raise typer.Exit(1)
+
+        if not pdf_files:
+            console.print(f"[yellow]No PDF files found matching pattern '{pattern}'[/yellow]")
+            raise typer.Exit(0)
+
+        console.print(f"[green]Found {len(pdf_files)} PDF file(s)[/green]\n")
+
+        # Build conversion options
+        options = ConversionOptions(
+            backend_name=backend,
+            dpi=dpi,
+            max_pages=max_pages,
+        )
+
+        # Show what we're doing
+        console.print(f"[bold blue]Converting {len(pdf_files)} files...[/bold blue]")
+        console.print(f"[dim]Output directory: {output_dir}[/dim]")
+        console.print(f"[dim]Parallel workers: {parallel}[/dim]\n")
+
+        # Run batch conversion with progress display
+        with BatchProgressDisplay(console, total_files=len(pdf_files)) as progress:
+            # Wrap the async conversion to update progress
+            async def run_batch_with_progress():
+                # Start batch conversion
+                result = await convert_batch(
+                    input_paths=pdf_files,
+                    output_dir=output_dir,
+                    config=config,
+                    parallel=parallel,
+                    options=options,
+                )
+                return result
+
+            result = asyncio.run(run_batch_with_progress())
+
+        # Print summary
+        print_batch_summary(console, result)
+
+        # Exit with appropriate code
+        if result.failed > 0:
+            raise typer.Exit(1)
+        else:
+            raise typer.Exit(0)
+
+    except DoclingHybridError as e:
+        _handle_docling_error(e, console, verbose)
+        raise typer.Exit(1)
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Cancelled by user[/yellow]")
+        raise typer.Exit(130)
+    except Exception as e:
+        console.print(f"[bold red]Unexpected error:[/bold red] {e}")
+        if verbose:
+            console.print_exception()
+        raise typer.Exit(1)
 
 
 if __name__ == "__main__":
