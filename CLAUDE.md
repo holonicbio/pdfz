@@ -201,7 +201,7 @@ DOCLING_HYBRID_MAX_WORKERS=2
 The easiest way to set up your API key:
 
 ```bash
-# Create the key file (add to .gitignore, never commit!)
+# Create the key file
 echo 'sk-or-v1-your-key-here' > openrouter_key
 
 # Source the environment setup
