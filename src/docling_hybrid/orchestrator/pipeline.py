@@ -139,7 +139,7 @@ class HybridPipeline:
                 except Exception as cb_error:
                     logger.error(
                         "progress_callback_error",
-                        event="on_page_start",
+                        callback_event="on_page_start",
                         error=str(cb_error),
                     )
 
@@ -183,7 +183,7 @@ class HybridPipeline:
                 except Exception as cb_error:
                     logger.error(
                         "progress_callback_error",
-                        event="on_page_complete",
+                        callback_event="on_page_complete",
                         error=str(cb_error),
                     )
 
@@ -203,7 +203,7 @@ class HybridPipeline:
                 except Exception as cb_error:
                     logger.error(
                         "progress_callback_error",
-                        event="on_page_error",
+                        callback_event="on_page_error",
                         error=str(cb_error),
                     )
 
@@ -250,20 +250,19 @@ class HybridPipeline:
         options = options or ConversionOptions()
         start_time = time.time()
 
-        # Validate input
-        if not pdf_path.exists():
-            raise ValidationError(
-                f"PDF file not found: {pdf_path}",
-                details={"path": str(pdf_path)}
-            )
-
-        # Generate document ID
+        # Generate document ID (do this before validation so we have it for callbacks)
         doc_id = generate_doc_id(pdf_path.name)
 
         # Bind logging context
         bind_context(doc_id=doc_id, pdf=str(pdf_path))
 
         try:
+            # Validate input (inside try block so callbacks are invoked on error)
+            if not pdf_path.exists():
+                raise ValidationError(
+                    f"PDF file not found: {pdf_path}",
+                    details={"path": str(pdf_path)}
+                )
             logger.info("conversion_started", pdf=str(pdf_path))
 
             # Get page count
@@ -277,7 +276,7 @@ class HybridPipeline:
                 except Exception as cb_error:
                     logger.error(
                         "progress_callback_error",
-                        event="on_conversion_start",
+                        callback_event="on_conversion_start",
                         error=str(cb_error),
                     )
             
@@ -404,7 +403,7 @@ class HybridPipeline:
                 except Exception as cb_error:
                     logger.error(
                         "progress_callback_error",
-                        event="on_conversion_complete",
+                        callback_event="on_conversion_complete",
                         error=str(cb_error),
                     )
 
@@ -418,7 +417,7 @@ class HybridPipeline:
                 except Exception as cb_error:
                     logger.error(
                         "progress_callback_error",
-                        event="on_conversion_error",
+                        callback_event="on_conversion_error",
                         error=str(cb_error),
                     )
             # Re-raise the original error
