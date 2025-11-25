@@ -19,12 +19,16 @@ Usage:
 
 from docling_hybrid.renderer.core import (
     get_page_count,
+    PdfRenderer,
     render_page_to_png_bytes,
+    render_pdf_pages,
     render_region_to_png_bytes,
 )
 
 __all__ = [
     "render_page_to_png_bytes",
     "render_region_to_png_bytes",
+    "render_pdf_pages",
     "get_page_count",
+    "PdfRenderer",
 ]
