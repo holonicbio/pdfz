@@ -101,7 +101,32 @@ class OcrBackendConfig(BaseModel):
         le=128000,
         description="Maximum tokens in response"
     )
-    
+    # Retry configuration
+    max_retries: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="Maximum number of retry attempts for transient failures"
+    )
+    retry_initial_delay: float = Field(
+        default=1.0,
+        ge=0.1,
+        le=60.0,
+        description="Initial delay in seconds before first retry"
+    )
+    retry_exponential_base: float = Field(
+        default=2.0,
+        ge=1.0,
+        le=10.0,
+        description="Base for exponential backoff calculation"
+    )
+    retry_max_delay: float = Field(
+        default=60.0,
+        ge=1.0,
+        le=300.0,
+        description="Maximum delay in seconds between retries"
+    )
+
     @field_validator("base_url")
     @classmethod
     def validate_url(cls, v: str) -> str:
