@@ -203,12 +203,32 @@ class OcrVlmBackend(ABC):
         """
         pass
     
+    async def health_check(self) -> bool:
+        """Check if the backend is healthy and responsive.
+
+        This method should perform a lightweight check to verify that
+        the backend service is accessible and operational.
+
+        Returns:
+            True if backend is healthy, False otherwise
+
+        Note:
+            Default implementation returns True (assumes healthy).
+            Backends should override this to implement actual health checks.
+
+        Example:
+            >>> is_healthy = await backend.health_check()
+            >>> if not is_healthy:
+            ...     logger.warning("Backend unhealthy")
+        """
+        return True
+
     async def close(self) -> None:
         """Close any open connections or resources.
-        
+
         Called when the backend is no longer needed. Override in
         subclasses if cleanup is required.
-        
+
         Default implementation does nothing.
         """
         pass

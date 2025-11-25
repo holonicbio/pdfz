@@ -24,7 +24,7 @@ Usage:
 
 from docling_hybrid.backends.base import OcrVlmBackend
 from docling_hybrid.backends.deepseek_mlx_stub import DeepseekOcrMlxBackend
-from docling_hybrid.backends.deepseek_vllm_stub import DeepseekOcrVllmBackend
+from docling_hybrid.backends.deepseek_vllm import DeepSeekVLLMBackend
 from docling_hybrid.backends.openrouter_nemotron import OpenRouterNemotronBackend
 from docling_hybrid.common.errors import ConfigurationError
 from docling_hybrid.common.logging import get_logger
@@ -35,7 +35,7 @@ logger = get_logger(__name__)
 # Registry of backend names to implementation classes
 BACKEND_REGISTRY: dict[str, type[OcrVlmBackend]] = {
     "nemotron-openrouter": OpenRouterNemotronBackend,
-    "deepseek-vllm": DeepseekOcrVllmBackend,
+    "deepseek-vllm": DeepSeekVLLMBackend,
     "deepseek-mlx": DeepseekOcrMlxBackend,
 }
 
