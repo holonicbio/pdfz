@@ -56,11 +56,12 @@ dev = [
     "pytest-cov>=4.1.0",
     "pytest-httpx>=0.30.0",
     "aioresponses>=0.7.0",
-    
+    "tomli-w>=1.0.0",
+
     # Linting & Formatting
     "ruff>=0.1.0",
     "mypy>=1.7.0",
-    
+
     # Type stubs
     "types-Pillow",
 ]
