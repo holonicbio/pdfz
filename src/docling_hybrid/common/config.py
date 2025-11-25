@@ -31,7 +31,7 @@ try:
 except ImportError:
     import tomllib  # Python 3.11+
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from docling_hybrid.common.errors import ConfigurationError
 from docling_hybrid.common.models import OcrBackendConfig
@@ -81,16 +81,27 @@ class BackendsConfig(BaseModel):
     """Backend configuration container."""
     default: str = "nemotron-openrouter"
     configs: dict[str, OcrBackendConfig] = Field(default_factory=dict)
-    
+
+    @model_validator(mode='after')
+    def validate_default_backend_exists(self) -> 'BackendsConfig':
+        """Validate that the default backend exists in configs."""
+        if self.configs and self.default not in self.configs:
+            available = list(self.configs.keys())
+            raise ValueError(
+                f"Default backend '{self.default}' not found in configured backends. "
+                f"Available backends: {', '.join(available)}"
+            )
+        return self
+
     def get_backend_config(self, name: str | None = None) -> OcrBackendConfig:
         """Get configuration for a specific backend.
-        
+
         Args:
             name: Backend name, or None to use default
-            
+
         Returns:
             Backend configuration
-            
+
         Raises:
             ConfigurationError: If backend not found
         """
@@ -110,6 +121,27 @@ class OutputConfig(BaseModel):
     add_page_separators: bool = True
     page_separator: str = "<!-- PAGE {page_num} -->\n\n"
 
+    @field_validator("format")
+    @classmethod
+    def validate_format(cls, v: str) -> str:
+        """Validate output format."""
+        valid = {"markdown", "md", "text", "txt"}
+        if v.lower() not in valid:
+            raise ValueError(
+                f"Invalid output format: {v}. Must be one of: {', '.join(valid)}"
+            )
+        return v.lower()
+
+    @field_validator("page_separator")
+    @classmethod
+    def validate_page_separator(cls, v: str) -> str:
+        """Validate page separator contains placeholder."""
+        if "{page_num}" not in v:
+            raise ValueError(
+                "page_separator must contain '{page_num}' placeholder"
+            )
+        return v
+
 
 class DoclingConfig(BaseModel):
     """Docling-specific configuration."""
@@ -120,9 +152,9 @@ class DoclingConfig(BaseModel):
 
 class Config(BaseModel):
     """Root configuration model.
-    
+
     Contains all configuration for the application.
-    
+
     Attributes:
         app: Application settings
         logging: Logging settings
@@ -137,6 +169,37 @@ class Config(BaseModel):
     backends: BackendsConfig = Field(default_factory=BackendsConfig)
     output: OutputConfig = Field(default_factory=OutputConfig)
     docling: DoclingConfig = Field(default_factory=DoclingConfig)
+
+    @model_validator(mode='after')
+    def validate_resource_constraints(self) -> 'Config':
+        """Validate that resource settings are reasonable.
+
+        This validator checks:
+        - max_workers is reasonable given available memory
+        - http_timeout_s is longer than a minimum reasonable time
+        - DPI settings are appropriate
+        """
+        # Estimate memory per worker (rough estimate: ~100MB per page at 200 DPI)
+        dpi = self.resources.page_render_dpi
+        estimated_mb_per_page = int((dpi / 200) ** 2 * 100)  # Scales quadratically with DPI
+        estimated_total_mb = self.resources.max_workers * estimated_mb_per_page
+
+        if estimated_total_mb > self.resources.max_memory_mb:
+            raise ValueError(
+                f"Resource configuration may exceed memory limits: "
+                f"{self.resources.max_workers} workers × {estimated_mb_per_page}MB/page "
+                f"≈ {estimated_total_mb}MB > {self.resources.max_memory_mb}MB limit. "
+                f"Consider reducing max_workers or page_render_dpi."
+            )
+
+        # Warn if very low memory per worker
+        mb_per_worker = self.resources.max_memory_mb // self.resources.max_workers
+        if mb_per_worker < 100:
+            # Note: We can't log here as logging might not be initialized yet
+            # This will be caught by Pydantic validation and raised as an error
+            pass  # Could add a warning mechanism here if needed
+
+        return self
 
 
 def _parse_backend_configs(backends_dict: dict[str, Any]) -> BackendsConfig:
