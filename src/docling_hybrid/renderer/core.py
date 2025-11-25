@@ -22,7 +22,7 @@ Usage:
 
 import io
 from pathlib import Path
-from typing import Tuple
+from typing import List, Optional, Tuple
 
 import pypdfium2 as pdfium
 from PIL import Image
@@ -301,7 +301,7 @@ def render_region_to_png_bytes(
         )
         
         return png_bytes
-        
+
     except ValidationError:
         raise
     except Exception as e:
@@ -314,3 +314,296 @@ def render_region_to_png_bytes(
                 "error": str(e),
             }
         ) from e
+
+
+# ============================================================================
+# Memory-Efficient Batch Rendering (Sprint 1 Enhancement)
+# ============================================================================
+
+
+class PdfRenderer:
+    """Memory-efficient PDF renderer for batch processing.
+
+    This class keeps the PDF document open across multiple page renders,
+    avoiding the overhead of repeatedly opening and closing the same file.
+    Ideal for processing multiple pages from the same document.
+
+    Features:
+    - Context manager interface for automatic cleanup
+    - Reuses PDF document handle across renders
+    - Memory-efficient for large documents
+    - Progress tracking support
+
+    Usage:
+        >>> from pathlib import Path
+        >>> with PdfRenderer(Path("document.pdf")) as renderer:
+        ...     print(f"Total pages: {renderer.page_count}")
+        ...     for i in range(renderer.page_count):
+        ...         image_bytes = renderer.render_page(i, dpi=200)
+        ...         # Process image_bytes...
+
+    Example with specific pages:
+        >>> with PdfRenderer(Path("document.pdf")) as renderer:
+        ...     pages = [0, 5, 10]  # Render pages 1, 6, 11
+        ...     for page_idx in pages:
+        ...         image_bytes = renderer.render_page(page_idx)
+    """
+
+    def __init__(self, pdf_path: Path):
+        """Initialize the renderer.
+
+        Args:
+            pdf_path: Path to the PDF file
+
+        Raises:
+            ValidationError: If PDF file doesn't exist
+            RenderingError: If PDF cannot be opened
+        """
+        if not pdf_path.exists():
+            raise ValidationError(
+                f"PDF file not found: {pdf_path}",
+                details={"path": str(pdf_path)}
+            )
+
+        self.pdf_path = pdf_path
+        self._pdf: Optional[pdfium.PdfDocument] = None
+        self._page_count: Optional[int] = None
+
+    def __enter__(self) -> "PdfRenderer":
+        """Open the PDF document.
+
+        Returns:
+            Self for context manager pattern
+
+        Raises:
+            RenderingError: If PDF cannot be opened
+        """
+        try:
+            self._pdf = pdfium.PdfDocument(str(self.pdf_path))
+            self._page_count = len(self._pdf)
+            logger.debug(
+                "pdf_opened",
+                path=str(self.pdf_path),
+                pages=self._page_count
+            )
+            return self
+        except Exception as e:
+            raise RenderingError(
+                f"Failed to open PDF: {e}",
+                details={"path": str(self.pdf_path), "error": str(e)}
+            ) from e
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Close the PDF document."""
+        if self._pdf is not None:
+            self._pdf.close()
+            self._pdf = None
+            logger.debug("pdf_closed", path=str(self.pdf_path))
+
+    @property
+    def page_count(self) -> int:
+        """Get the number of pages in the PDF.
+
+        Returns:
+            Number of pages
+
+        Raises:
+            RuntimeError: If called before entering context
+        """
+        if self._pdf is None:
+            raise RuntimeError(
+                "PdfRenderer must be used as a context manager. "
+                "Use: with PdfRenderer(path) as renderer: ..."
+            )
+        return self._page_count or 0
+
+    def render_page(
+        self,
+        page_index: int,
+        dpi: int = 200,
+    ) -> bytes:
+        """Render a single page to PNG bytes.
+
+        Args:
+            page_index: Page index (0-based)
+            dpi: Resolution in dots per inch (default: 200)
+
+        Returns:
+            PNG image as bytes
+
+        Raises:
+            RuntimeError: If called before entering context
+            ValidationError: If page index or DPI is invalid
+            RenderingError: If rendering fails
+        """
+        if self._pdf is None:
+            raise RuntimeError(
+                "PdfRenderer must be used as a context manager. "
+                "Use: with PdfRenderer(path) as renderer: ..."
+            )
+
+        # Validate inputs
+        if page_index < 0:
+            raise ValidationError(
+                f"Page index must be non-negative, got {page_index}",
+                details={"page_index": page_index}
+            )
+
+        if page_index >= self.page_count:
+            raise ValidationError(
+                f"Page index {page_index} out of range (PDF has {self.page_count} pages)",
+                details={"page_index": page_index, "total_pages": self.page_count}
+            )
+
+        if dpi < 72 or dpi > 600:
+            raise ValidationError(
+                f"DPI must be between 72 and 600, got {dpi}",
+                details={"dpi": dpi, "hint": "Use 150-200 for local dev, 200-300 for production"}
+            )
+
+        try:
+            # Get page
+            page = self._pdf[page_index]
+
+            # Calculate scale factor
+            scale = dpi / 72.0
+
+            # Render to bitmap
+            bitmap = page.render(scale=scale, rotation=0)
+
+            # Convert to PIL Image
+            pil_image = bitmap.to_pil()
+
+            # Ensure RGB mode
+            if pil_image.mode != "RGB":
+                pil_image = pil_image.convert("RGB")
+
+            # Export to PNG bytes
+            buffer = io.BytesIO()
+            pil_image.save(buffer, format="PNG", optimize=True)
+            png_bytes = buffer.getvalue()
+
+            logger.debug(
+                "page_rendered_batch",
+                pdf=str(self.pdf_path),
+                page_index=page_index,
+                dpi=dpi,
+                size_kb=len(png_bytes) // 1024,
+            )
+
+            return png_bytes
+
+        except ValidationError:
+            raise
+        except Exception as e:
+            raise RenderingError(
+                f"Failed to render page {page_index}: {e}",
+                details={
+                    "path": str(self.pdf_path),
+                    "page_index": page_index,
+                    "dpi": dpi,
+                    "error": str(e),
+                }
+            ) from e
+
+    def render_pages(
+        self,
+        page_indices: Optional[List[int]] = None,
+        dpi: int = 200,
+    ) -> List[bytes]:
+        """Render multiple pages in batch.
+
+        Memory-efficient batch rendering of multiple pages from the same document.
+
+        Args:
+            page_indices: List of page indices to render (0-based).
+                         If None, renders all pages.
+            dpi: Resolution in dots per inch (default: 200)
+
+        Returns:
+            List of PNG images as bytes, in the same order as page_indices
+
+        Raises:
+            RuntimeError: If called before entering context
+            ValidationError: If any page index is invalid
+            RenderingError: If rendering fails
+
+        Example:
+            >>> with PdfRenderer(Path("doc.pdf")) as renderer:
+            ...     # Render first 3 pages
+            ...     images = renderer.render_pages([0, 1, 2], dpi=150)
+            ...
+            ...     # Render all pages
+            ...     all_images = renderer.render_pages()
+        """
+        if self._pdf is None:
+            raise RuntimeError(
+                "PdfRenderer must be used as a context manager. "
+                "Use: with PdfRenderer(path) as renderer: ..."
+            )
+
+        # Default to all pages
+        if page_indices is None:
+            page_indices = list(range(self.page_count))
+
+        logger.info(
+            "batch_render_started",
+            pdf=str(self.pdf_path),
+            page_count=len(page_indices),
+            dpi=dpi,
+        )
+
+        results = []
+        for page_idx in page_indices:
+            image_bytes = self.render_page(page_idx, dpi=dpi)
+            results.append(image_bytes)
+
+        logger.info(
+            "batch_render_completed",
+            pdf=str(self.pdf_path),
+            pages_rendered=len(results),
+        )
+
+        return results
+
+
+def render_pdf_pages(
+    pdf_path: Path,
+    page_indices: Optional[List[int]] = None,
+    dpi: int = 200,
+) -> List[bytes]:
+    """Convenience function for batch rendering with automatic cleanup.
+
+    Renders multiple pages from a PDF with memory-efficient handling.
+    This is a convenience wrapper around PdfRenderer for one-shot batch rendering.
+
+    Args:
+        pdf_path: Path to the PDF file
+        page_indices: List of page indices to render (0-based).
+                     If None, renders all pages.
+        dpi: Resolution in dots per inch (default: 200)
+
+    Returns:
+        List of PNG images as bytes
+
+    Raises:
+        ValidationError: If PDF file doesn't exist or page indices invalid
+        RenderingError: If PDF cannot be opened or rendering fails
+
+    Example:
+        >>> # Render specific pages
+        >>> images = render_pdf_pages(
+        ...     Path("document.pdf"),
+        ...     page_indices=[0, 5, 10],
+        ...     dpi=200,
+        ... )
+        >>>
+        >>> # Render all pages
+        >>> all_images = render_pdf_pages(Path("document.pdf"))
+
+    Note:
+        For processing many documents, consider using PdfRenderer directly
+        with the context manager to have more control over resource management.
+    """
+    with PdfRenderer(pdf_path) as renderer:
+        return renderer.render_pages(page_indices=page_indices, dpi=dpi)
